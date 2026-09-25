@@ -58,6 +58,7 @@ mock.post('/v1/chat/completions', async (c) => {
   const idx = toolMsgs.length
   let next: Step | null = steps[idx] || null
   const hasTools = Array.isArray(body.tools) && body.tools.length
+  if (!hasTools) next = null
   if (next && hasTools && !body.tools.some((t: any) => t.function?.name === next!.name)) next = null // ask mode
   if (next?.args?.__insertTop) {
     const readMsg = [...toolMsgs].reverse().find((m) => /^File: /.test(m.content))
