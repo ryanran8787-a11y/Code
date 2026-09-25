@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CursorWeb</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="/vendor/codicons/codicon.css" />
+  <link rel="stylesheet" data-name="vs/editor/editor.main" href="/vendor/monaco/vs/editor/editor.main.css" />
+  <link rel="stylesheet" href="/css/workbench.css" />
+</head>
+<body class="monaco-workbench">
+  <div id="boot" class="boot"><div class="boot-logo"></div><div>Loading workbench…</div></div>
+  <script src="/vendor/marked.js"></script>
+  <script src="/vendor/purify.js"></script>
+  <script src="/vendor/diff.js"></script>
+  <script>var require = { paths: { vs: location.origin + '/vendor/monaco/vs' } };</script>
+  <script src="/vendor/monaco/vs/loader.js"></script>
+  <script>window.monacoReady = new Promise((res) => require(['vs/editor/editor.main'], () => res(window.monaco)));</script>
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>

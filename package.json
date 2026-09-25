@@ -1,20 +1,29 @@
 {
-  "name": "webapp",
+  "name": "cursorweb",
+  "version": "0.1.0",
+  "private": true,
   "type": "module",
+  "description": "A web AI coding tool reproducing Cursor 3's Editor Window + Agents Window, built on VS Code's open-source editor core (Monaco), themes and codicons.",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "wrangler pages dev",
-    "deploy": "npm run build && wrangler pages deploy",
-    "cf-typegen": "wrangler types --env-interface CloudflareBindings"
+    "start": "tsx server/index.ts",
+    "dev": "tsx watch server/index.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "test:e2e": "node tests/e2e.mjs"
   },
   "dependencies": {
-    "hono": "^4.13.8"
+    "@hono/node-server": "^2.1.1",
+    "@vscode/codicons": "^0.0.46-24",
+    "diff": "^8.0.2",
+    "dompurify": "^3.2.6",
+    "hono": "^4.13.8",
+    "marked": "^16.3.0",
+    "monaco-editor": "0.52.2",
+    "openai": "^7.23.0"
   },
   "devDependencies": {
-    "@hono/vite-build": "^1.11.1",
-    "@hono/vite-dev-server": "^0.26.1",
-    "vite": "^8.1.4",
-    "wrangler": "^4.110.0"
+    "@types/node": "^24.0.0",
+    "playwright": "^1.55.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
   }
 }
