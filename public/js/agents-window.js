@@ -41,6 +41,7 @@ export class AgentsWindow extends Emitter {
 
     sash(this.sideSash, { target: this.sidebar, min: 200, max: 480, storageKey: 'agents.sideW' })
     sash(this.reviewSash, { target: this.reviewPanel, min: 320, max: 1100, invert: true, storageKey: 'agents.reviewW' })
+    if (!localStorage.getItem('agents.reviewW')) this.reviewPanel.style.width = Math.round(Math.max(420, innerWidth * 0.36)) + 'px'
     this.toggleReview(localStorage.getItem('agents.review') === '1')
 
     agentStore.on('list', () => { this.renderSidebar(); this.renderTabs() })
@@ -58,7 +59,11 @@ export class AgentsWindow extends Emitter {
 
   // ---------- state helpers ----------
   focusedAgent() { return this.tabs[this.focused] ?? null }
-  isVisible(id) { return document.body.dataset.window === 'agents' && this.visibleTabs().includes(id) }
+  isVisible(id) {
+    const w = document.body.dataset.window
+    if (w === 'editor') { const ed = window.cursorWeb?.editor; return !!ed && ed.chatAgent === id && !ed.aux.classList.contains('hidden') }
+    return this.visibleTabs().includes(id)
+  }
   persist() {
     localStorage.setItem('agents.tabs', JSON.stringify(this.tabs))
     localStorage.setItem('agents.focused', String(this.focused))
@@ -234,6 +239,12 @@ export class AgentsWindow extends Emitter {
       if (id === null) wrap.classList.add('is-new')
       return wrap
     }))
+    const slots = this.layoutMode === 'grid' ? 4 : this.layoutMode === 'split' ? 2 : 1
+    for (let i = vis.length; i < slots; i++) {
+      this.stage.append(h('div', { class: 'aw-pane aw-placeholder' },
+        h('button', { class: 'aw-placeholder-btn', onclick: () => { this.tabs.push(null); this.focused = this.tabs.length - 1; this.persist(); this.renderLayout(); setTimeout(() => this.focusComposer(), 30) } },
+          icon('add'), h('span', {}, 'New Agent'), h('span', { class: 'muted small' }, 'Run another agent in parallel'))))
+    }
     this.renderReviewList()
   }
 

@@ -125,7 +125,7 @@ export class AgentChatView {
     this.unsub = [
       agentStore.on('item', (id, item) => id === this.agentId && this.renderItem(item)),
       agentStore.on('delta', (id, item) => id === this.agentId && this.renderItem(item)),
-      agentStore.on('summary', (s) => s.id === this.agentId && this.renderMeta()),
+      agentStore.on('summary', (s) => { if (s.id !== this.agentId) return; this.renderMeta(); if (s.unread && this.el.isConnected && this.el.offsetParent) agentStore.markRead(s.id) }),
       agentStore.on('changes', (id) => id === this.agentId && this.renderChanges()),
       agentStore.on('detail', (id) => id === this.agentId && this.renderAll()),
     ]
@@ -133,6 +133,7 @@ export class AgentChatView {
 
   async show(agentId) {
     this.agentId = agentId
+    this.todosOpen = undefined
     this.itemEls.clear()
     this.list.replaceChildren()
     if (!agentId) { this.renderEmpty(); this.renderMeta(); return }
@@ -191,8 +192,12 @@ export class AgentChatView {
     if (a?.todos?.length) {
       const done = a.todos.filter((t) => t.status === 'completed').length
       this.todosEl.classList.remove('hidden')
+      const running = a.status === 'running' || a.status === 'awaiting_approval'
+      if (this.todosOpen === undefined || this._lastRunning !== running) this.todosOpen = running
+      this._lastRunning = running
+      this.todosEl.classList.toggle('collapsed', !this.todosOpen)
       this.todosEl.replaceChildren(
-        h('div', { class: 'todos-head' }, icon('checklist'), `To-dos ${done}/${a.todos.length}`),
+        h('div', { class: 'todos-head', onclick: () => { this.todosOpen = !this.todosOpen; this.todosEl.classList.toggle('collapsed', !this.todosOpen) } }, icon('chevron-down', 'chev'), icon('checklist'), `To-dos ${done}/${a.todos.length}`),
         ...a.todos.map((t) => h('div', { class: 'todo ' + t.status }, icon(t.status === 'completed' ? 'pass-filled' : t.status === 'in_progress' ? 'circle-large-filled' : 'circle-large-outline'), h('span', {}, t.content))),
       )
     } else this.todosEl.classList.add('hidden')
@@ -230,7 +235,7 @@ export class AgentChatView {
         h('div', { class: 'flex1' }),
         h('button', { class: 'btn-ghost', onclick: (e) => { e.stopPropagation(); agentStore.resolve(this.agentId, null, false) } }, 'Undo all'),
         h('button', { class: 'btn-primary small', onclick: (e) => { e.stopPropagation(); agentStore.resolve(this.agentId, null, true) } }, 'Keep all'),
-        h('button', { class: 'btn-ghost', title: 'Review diffs', onclick: (e) => { e.stopPropagation(); this.openDiff?.(this.agentId, pending[0].path) } }, 'Review'),
+        h('button', { class: 'btn-ghost review-btn', title: 'Review diffs', onclick: (e) => { e.stopPropagation(); this.openDiff?.(this.agentId, pending[0].path) } }, icon('diff'), h('span', { class: 'review-label' }, 'Review')),
       ),
       h('div', { class: 'changes-list' }, rows),
     )
@@ -343,7 +348,7 @@ export class AgentChatView {
     if (it.name === 'read_file') {
       const r = it.meta?.range
       label = [fileLink(a.path || ''), r ? h('span', { class: 'muted' }, ` L${r[0]}-${r[1]}`) : null]
-    } else if (it.name === 'list_dir') label = h('code', {}, (a.path || '.') + '/')
+    } else if (it.name === 'list_dir') label = h('code', {}, (a.path && a.path !== '.' ? a.path.replace(/\/$/, '') : '.') + '/')
     else if (it.name === 'grep_search') label = [h('code', {}, a.query), it.meta ? h('span', { class: 'muted' }, ` ${it.meta.count} results`) : null]
     else if (it.name === 'file_search') label = [h('code', {}, a.pattern), it.meta ? h('span', { class: 'muted' }, ` ${it.meta.count} files`) : null]
     else label = h('code', {}, JSON.stringify(a).slice(0, 80))

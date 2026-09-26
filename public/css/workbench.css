@@ -374,7 +374,8 @@ button.sb-remote:hover { background: var(--accent); filter: brightness(1.15); co
 .composer-bar { display: flex; align-items: center; gap: 4px; }
 .composer-pill { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: #ffffff0d; color: var(--fg); font-size: 12px; }
 .composer-pill:hover { background: #ffffff18; }
-.composer-model { background: transparent; border: 0; color: var(--muted); font-size: 12px; outline: none; cursor: pointer; max-width: 150px; }
+.composer-model { background: transparent; border: 0; color: var(--muted); font-size: 12px; outline: none; cursor: pointer; max-width: 160px; field-sizing: content; padding: 2px 4px; border-radius: 6px; }
+.composer-model:hover { background: #ffffff10; color: var(--fg); }
 .composer-model option { background: var(--bg3); color: var(--fg); }
 .composer-icon-btn { width: 26px; height: 26px; border-radius: 13px; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .composer-icon-btn:hover { background: #ffffff14; color: var(--fg-strong); }
@@ -424,3 +425,35 @@ button.sb-remote:hover { background: var(--accent); filter: brightness(1.15); co
 
 /* Monaco tweaks */
 .monaco-editor .margin, .monaco-editor, .monaco-editor-background { background-color: var(--bg); }
+
+/* ---------- narrow-pane robustness ---------- */
+.btn-ghost, .btn-primary, .aw-rtab, .composer-pill { white-space: nowrap; flex: none; }
+.chat-header { min-width: 0; }
+.chat-title { flex: 0 1 auto; min-width: 0; }
+.chat-sub { white-space: nowrap; flex: none; }
+.changes-head > span { white-space: nowrap; }
+.diff-bar { min-width: 0; overflow: hidden; white-space: nowrap; }
+.diff-bar > .muted { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.diff-bar .diff-title, .diff-bar .diff-status { flex: none; }
+.agent-chat { container-type: inline-size; }
+@container (max-width: 520px) {
+  .chat-sub { display: none; }
+  .changes-head .review-label { display: none; }
+  .chat-list { padding-left: 14px; padding-right: 14px; }
+  .chat-bottom { padding-left: 10px; padding-right: 10px; }
+}
+.editor-group { container-type: inline-size; }
+@container (max-width: 560px) {
+  .diff-bar > .muted, .diff-bar .btn-ghost .codicon { display: none; }
+}
+
+.todos-head { cursor: pointer; }
+.chat-todos.collapsed .todo { display: none; }
+.chat-todos.collapsed .todos-head { margin-bottom: 0; }
+.chat-todos.collapsed .chev { transform: rotate(-90deg); }
+.todos-head .chev { font-size: 12px; transition: transform .12s; }
+
+.aw-placeholder { align-items: center; justify-content: center; }
+.aw-placeholder-btn { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px 40px; border: 1px dashed var(--border); border-radius: 12px; color: var(--fg); }
+.aw-placeholder-btn .codicon { font-size: 22px; }
+.aw-placeholder-btn:hover { border-color: #4a4b4e; background: var(--bg2); color: var(--fg-strong); }

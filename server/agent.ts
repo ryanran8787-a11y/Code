@@ -268,8 +268,8 @@ async function run(a: Agent) {
         const r = d.reasoning_content || d.reasoning
         if (typeof r === 'string') reasoning += r
         if (d.content) {
+          if (!textPushed) { pushItem(a, { ...textItem } as TimelineItem); a.timeline[a.timeline.length - 1] = textItem; textPushed = true }
           ;(textItem as any).text += d.content
-          if (!textPushed) { pushItem(a, textItem); textPushed = true }
           publish({ kind: 'agent.delta', agentId: a.id, itemId: textItem.id, delta: d.content })
         }
         for (const tc of d.tool_calls || []) {
