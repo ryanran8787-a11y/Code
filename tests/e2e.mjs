@@ -1,10 +1,12 @@
 // End-to-end verification of the core loop (uses the built-in mock model).
 import { chromium } from 'playwright'
+import fsTok from 'node:fs'
+const TOKEN = process.env.ACCESS_TOKEN || (/ACCESS_TOKEN=(.*)/.exec(fsTok.existsSync('.env.local') ? fsTok.readFileSync('.env.local','utf8') : '') || [])[1] || ''
 import fs from 'node:fs'
 const BASE = process.env.BASE || 'http://localhost:3000'
 const WS = 'sample-workspace'
 const ok = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); console.log('  ✓ ' + m) }
-const api = (path, method = 'GET', body) => fetch(BASE + path, { method, headers: { 'content-type': 'application/json' }, body: body && JSON.stringify(body) }).then(r => r.json())
+const api = (path, method = 'GET', body) => fetch(BASE + path, { method, headers: { 'content-type': 'application/json', cookie: 'cw_token=' + TOKEN }, body: body && JSON.stringify(body) }).then(r => r.json())
 
 await api('/api/settings', 'PUT', { baseUrl: 'mock', autoRunCommands: false })
 for (const a of await api('/api/agents')) await api('/api/agents/' + a.id, 'DELETE')
@@ -15,7 +17,7 @@ const p = await b.newPage({ viewport: { width: 1440, height: 860 } })
 const errors = []
 p.on('pageerror', e => errors.push(e.message))
 await p.addInitScript(() => { if (!sessionStorage.getItem('x')) { localStorage.clear(); sessionStorage.setItem('x', '1') } })
-await p.goto(BASE + '/#editor')
+await p.goto(BASE + '/?token=' + TOKEN + '#editor')
 await p.waitForSelector('.app')
 
 console.log('1. Editor Window')

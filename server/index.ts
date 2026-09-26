@@ -20,6 +20,19 @@ app.onError((err, c) => {
   return c.json({ error: err.message }, status)
 })
 
+// Optional protection: set ACCESS_TOKEN to require ?token=... once (stored in a cookie).
+const ACCESS_TOKEN = process.env.ACCESS_TOKEN
+if (ACCESS_TOKEN) {
+  app.use('*', async (c, next) => {
+    if (c.req.path.startsWith('/mock/')) return next()
+    const q = c.req.query('token')
+    const cookie = /(?:^|;\s*)cw_token=([^;]+)/.exec(c.req.header('cookie') || '')?.[1]
+    if (q === ACCESS_TOKEN) { c.header('Set-Cookie', `cw_token=${ACCESS_TOKEN}; Path=/; HttpOnly; SameSite=Lax`); return next() }
+    if (cookie === ACCESS_TOKEN) return next()
+    return c.text('Unauthorized — open this URL with ?token=<ACCESS_TOKEN>', 401)
+  })
+}
+
 app.route('/mock', mock)
 
 // ---------- workspace / files ----------

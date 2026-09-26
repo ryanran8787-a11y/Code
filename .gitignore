@@ -33,3 +33,4 @@ lerna-debug.log*
 .DS_Store
 .cursorweb/
 tests/screens/
+.env.local

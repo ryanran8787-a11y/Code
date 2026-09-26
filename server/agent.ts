@@ -256,7 +256,16 @@ async function run(a: Agent) {
       const body: any = { model: a.model, messages, tools, stream: true, stream_options: { include_usage: true } }
       if (settings.temperature !== null && settings.temperature !== undefined) body.temperature = settings.temperature
 
-      const stream: any = await client().chat.completions.create(body, { signal: ctrl.signal })
+      let stream: any
+      try {
+        stream = await client().chat.completions.create(body, { signal: ctrl.signal })
+      } catch (e: any) {
+        // Some OpenAI-compatible servers reject stream_options / temperature: retry once without extras.
+        if (e?.status === 400 && !ctrl.signal.aborted) {
+          delete body.stream_options; delete body.temperature
+          stream = await client().chat.completions.create(body, { signal: ctrl.signal })
+        } else throw e
+      }
       const textItem: TimelineItem = { id: uid(), type: 'assistant', text: '', ts: Date.now(), streaming: true }
       let textPushed = false
       let reasoning = ''
