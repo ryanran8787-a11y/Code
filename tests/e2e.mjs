@@ -4,7 +4,7 @@ import fsTok from 'node:fs'
 const TOKEN = process.env.ACCESS_TOKEN || (/ACCESS_TOKEN=(.*)/.exec(fsTok.existsSync('.env.local') ? fsTok.readFileSync('.env.local','utf8') : '') || [])[1] || ''
 import fs from 'node:fs'
 const BASE = process.env.BASE || 'http://localhost:3000'
-const WS = 'sample-workspace'
+const WS = 'workspace'
 const ok = (c, m) => { if (!c) throw new Error('ASSERT: ' + m); console.log('  ✓ ' + m) }
 const api = (path, method = 'GET', body) => fetch(BASE + path, { method, headers: { 'content-type': 'application/json', cookie: 'cw_token=' + TOKEN }, body: body && JSON.stringify(body) }).then(r => r.json())
 

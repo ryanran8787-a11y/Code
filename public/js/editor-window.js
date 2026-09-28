@@ -11,7 +11,9 @@ import { ExplorerView, SearchView } from './explorer.js'
 import { TerminalPanel } from './terminal.js'
 import { AgentChatView } from './chat.js'
 import { h, icon, sash, timeAgo } from './util.js'
-import { Emitter } from './api.js'
+import { Emitter, api } from './api.js'
+import { ScmView } from './scm.js'
+import { BrowserView, PortsView } from './browser.js'
 
 export class EditorWindow extends Emitter {
   constructor({ workspace }) {
@@ -21,7 +23,12 @@ export class EditorWindow extends Emitter {
     this.explorer = new ExplorerView({ openFile: (p, o) => this.openFile(p, o), workspaceName: workspace.name, onRename: (a, b) => this.group.renameTabsForPath(a, b) })
     this.search = new SearchView({ openFile: (p, o) => this.openFile(p, o) })
     this.agentsList = h('div', { class: 'pane agents-pane' })
-    this.terminal = new TerminalPanel()
+    this.terminal = new TerminalPanel({ onLink: (uri) => this.openLink(uri) })
+    this.scm = new ScmView({ openDiff: (p) => this.group.openGitDiff(p), openFile: (p) => this.openFile(p, { preview: false }) })
+    this.scm.onStatus = (st) => { this.gitStatus = st; this.renderActivity(); this.renderStatus() }
+    this.browser = new BrowserView({ onDesignPrompt: (t) => this.sendToChat(t) })
+    this.ports = new PortsView({ openPort: (port) => this.openBrowser(`localhost:${port}`) })
+    this.group.browser = this.browser
     this.chat = new AgentChatView({
       compact: true,
       openFile: (p) => this.openFile(p, { preview: false }),
@@ -37,12 +44,11 @@ export class EditorWindow extends Emitter {
     this.sidebar = h('div', { class: 'sidebar' })
     this.sidebarSash = h('div', { class: 'sash sash-v' })
     // --- panel
-    this.panelTitle = h('div', { class: 'panel-title' },
-      h('span', { class: 'panel-tab active' }, 'Terminal'), h('span', { class: 'panel-tab' }, 'Output'), h('div', { class: 'flex1' }),
-      h('button', { class: 'icon-btn', title: 'Clear', onclick: () => this.terminal.out.replaceChildren() }, icon('clear-all')),
-      h('button', { class: 'icon-btn', title: 'Maximize Panel', onclick: () => this.panel.classList.toggle('maximized') }, icon('chevron-up')),
-      h('button', { class: 'icon-btn', title: 'Close Panel', onclick: () => this.togglePanel(false) }, icon('close')))
-    this.panel = h('div', { class: 'panel' }, this.panelTitle, this.terminal.el)
+    this.panelTab = localStorage.getItem('editor.panelTab') || 'terminal'
+    this.panelTitle = h('div', { class: 'panel-title' })
+    this.panelBody = h('div', { class: 'panel-body' })
+    this.panel = h('div', { class: 'panel' }, this.panelTitle, this.panelBody)
+    this.renderPanel()
     this.panelSash = h('div', { class: 'sash sash-h' })
     // --- auxiliary (agent) bar
     this.chatHead = h('div', { class: 'aux-title' })
@@ -87,7 +93,9 @@ export class EditorWindow extends Emitter {
     this.activity.replaceChildren(
       item('explorer', 'files', 'Explorer (Ctrl+Shift+E)'),
       item('search', 'search', 'Search (Ctrl+Shift+F)'),
+      item('scm', 'source-control', 'Source Control (Ctrl+Shift+G)', this.gitStatus?.repo ? (this.gitStatus.entries.length || null) : null),
       item('agents', 'hubot', 'Agents', running || null),
+      h('button', { class: 'activity-item', title: 'Browser (preview local dev servers)', onclick: () => this.openBrowser() }, icon('globe')),
       h('div', { class: 'flex1' }),
       h('button', { class: 'activity-item', title: 'Open Agents Window (Ctrl+Shift+A)', onclick: () => this.emit('switch', 'agents') }, icon('layout-sidebar-left')),
       h('button', { class: 'activity-item', title: 'Settings', onclick: () => this.emit('settings') }, icon('settings-gear')),
@@ -99,7 +107,8 @@ export class EditorWindow extends Emitter {
     this.view = id
     localStorage.setItem('editor.view', id)
     this.sidebar.classList.remove('hidden'); this.sidebarSash.classList.remove('hidden')
-    const el = id === 'search' ? this.search.el : id === 'agents' ? this.agentsList : this.explorer.el
+    const el = id === 'search' ? this.search.el : id === 'agents' ? this.agentsList : id === 'scm' ? this.scm.el : this.explorer.el
+    if (id === 'scm') this.scm.refresh()
     this.sidebar.replaceChildren(el)
     if (id === 'search') this.search.focus()
     if (id === 'agents') this.renderAgentsPane()
@@ -147,11 +156,44 @@ export class EditorWindow extends Emitter {
 
   openFile(p, o) { return this.group.openFile(p, o) }
 
-  togglePanel(show = this.panel.classList.contains('hidden')) {
+  renderPanel() {
+    const tab = (id, label) => h('span', { class: 'panel-tab' + (this.panelTab === id ? ' active' : ''), onclick: () => { this.panelTab = id; localStorage.setItem('editor.panelTab', id); this.renderPanel() } }, label)
+    const isTerm = this.panelTab === 'terminal'
+    this.panelTitle.replaceChildren(tab('terminal', 'Terminal'), tab('ports', 'Ports'), h('div', { class: 'flex1' }),
+      isTerm ? h('button', { class: 'icon-btn', title: 'New Terminal', onclick: () => this.terminal.create() }, icon('add')) : null,
+      isTerm ? h('button', { class: 'icon-btn', title: 'Kill Terminal', onclick: () => this.terminal.kill() }, icon('trash')) : null,
+      isTerm ? h('button', { class: 'icon-btn', title: 'Clear', onclick: () => this.terminal.clear() }, icon('clear-all')) : null,
+      h('button', { class: 'icon-btn', title: 'Maximize Panel', onclick: () => { this.panel.classList.toggle('maximized'); setTimeout(() => this.terminal.fitAll(), 30) } }, icon('chevron-up')),
+      h('button', { class: 'icon-btn', title: 'Close Panel', onclick: () => this.togglePanel(false) }, icon('close')))
+    this.panelBody.replaceChildren(isTerm ? this.terminal.el : this.ports.el)
+    if (isTerm && !this.panel.classList.contains('hidden')) this.terminal.ensure().then(() => this.terminal.fitAll())
+    if (!isTerm) this.ports.render()
+  }
+
+  togglePanel(show = this.panel.classList.contains('hidden'), tab) {
+    if (tab && tab !== this.panelTab) { this.panelTab = tab; localStorage.setItem('editor.panelTab', tab) }
     this.panel.classList.toggle('hidden', !show)
     this.panelSash.classList.toggle('hidden', !show)
     localStorage.setItem('editor.panel', show ? '1' : '0')
-    if (show) setTimeout(() => this.terminal.focus(), 10)
+    if (show) { this.renderPanel(); setTimeout(() => this.panelTab === 'terminal' && this.terminal.focus(), 60) }
+  }
+
+  openBrowser(url) {
+    if (url) this.browser.navigate(url)
+    this.group.openBrowser()
+  }
+
+  openLink(uri) {
+    const m = /^https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d+)(\/.*)?$/.exec(uri)
+    if (m) this.openBrowser(`localhost:${m[1]}${m[2] || ''}`)
+    else window.open(uri, '_blank', 'noopener')
+  }
+
+  sendToChat(text) {
+    this.toggleAux(true)
+    this.chat.composer.input.value = text
+    this.chat.composer.autosize()
+    this.chat.focus()
   }
   toggleAux(show = this.aux.classList.contains('hidden')) {
     this.aux.classList.toggle('hidden', !show)
@@ -172,7 +214,7 @@ export class EditorWindow extends Emitter {
     const waiting = agentStore.list.filter((a) => a.status === 'awaiting_approval').length
     this.status.replaceChildren(
       h('button', { class: 'sb-item sb-remote', title: 'Switch to Agents Window', onclick: () => this.emit('switch', 'agents') }, icon('remote'), 'Editor'),
-      h('span', { class: 'sb-item' }, icon('source-control'), 'main'),
+      h('button', { class: 'sb-item', title: 'Source Control', onclick: () => this.setView('scm') }, icon('source-control'), this.gitStatus?.repo ? (this.gitStatus.branch || 'HEAD') + (this.gitStatus.entries.length ? '*' : '') : 'no git'),
       h('span', { class: 'sb-item', title: 'Agents' }, icon('hubot'), running ? `${running} running` : 'Agents idle', waiting ? h('span', { class: 'sb-warn' }, ` · ${waiting} needs approval`) : null),
       h('div', { class: 'flex1' }),
       pos ? h('span', { class: 'sb-item' }, `Ln ${pos.lineNumber}, Col ${pos.column}`) : null,

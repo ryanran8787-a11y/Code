@@ -34,3 +34,4 @@ lerna-debug.log*
 .cursorweb/
 tests/screens/
 .env.local
+/workspace/

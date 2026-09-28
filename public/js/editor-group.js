@@ -3,11 +3,12 @@
 import { files } from './files.js'
 import { agentStore } from './agent-store.js'
 import { h, icon, basename, dirname, fileIcon, languageOf, toast } from './util.js'
-import { Emitter } from './api.js'
+import { Emitter, api, bus } from './api.js'
 
 export class EditorGroup extends Emitter {
   constructor({ id = 'main', showBreadcrumbs = true } = {}) {
     super()
+    this.showBreadcrumbs = showBreadcrumbs
     this.id = id
     this.tabs = [] // {key, kind:'file'|'diff', path, agentId?, preview}
     this.active = null
@@ -18,6 +19,7 @@ export class EditorGroup extends Emitter {
     this.breadcrumbs = h('div', { class: 'breadcrumbs' + (showBreadcrumbs ? '' : ' hidden') })
     this.editorHost = h('div', { class: 'editor-host' })
     this.diffHost = h('div', { class: 'editor-host hidden' })
+    this.browserHost = h('div', { class: 'editor-host hidden' })
     this.diffBar = h('div', { class: 'diff-bar hidden' })
     this.welcome = h('div', { class: 'editor-welcome' },
       h('div', { class: 'welcome-logo' }),
@@ -27,7 +29,7 @@ export class EditorGroup extends Emitter {
     this.el = h('div', { class: 'editor-group' },
       h('div', { class: 'tabs-container' }, this.tabStrip, this.tabActions),
       this.breadcrumbs, this.diffBar,
-      h('div', { class: 'editor-body' }, this.editorHost, this.diffHost, this.welcome))
+      h('div', { class: 'editor-body' }, this.editorHost, this.diffHost, this.browserHost, this.welcome))
     this.editor = monaco.editor.create(this.editorHost, {
       automaticLayout: true, theme: 'cursor-dark', fontSize: 13, lineHeight: 20,
       fontFamily: "'JetBrains Mono', 'Fira Code', Menlo, Consolas, 'Courier New', monospace",
@@ -58,7 +60,22 @@ export class EditorGroup extends Emitter {
     this.render()
   }
 
-  key(kind, path, agentId) { return kind === 'diff' ? `diff:${agentId}:${path}` : `file:${path}` }
+  key(kind, path, agentId) { return kind === 'diff' ? `diff:${agentId}:${path}` : kind === 'gitdiff' ? `gitdiff:${path}` : kind === 'browser' ? 'browser' : `file:${path}` }
+
+  /** Working-tree changes vs HEAD (Source Control). */
+  async openGitDiff(path) {
+    const key = this.key('gitdiff', path)
+    if (!this.tabs.find((x) => x.key === key)) {
+      const ai = this.tabs.findIndex((x) => x.key === this.active)
+      this.tabs.splice(ai + 1, 0, { key, kind: 'gitdiff', path })
+    }
+    await this.activate(key)
+  }
+
+  async openBrowser() {
+    if (!this.tabs.find((x) => x.key === 'browser')) this.tabs.push({ key: 'browser', kind: 'browser', path: 'Browser' })
+    await this.activate('browser')
+  }
   activeTab() { return this.tabs.find((t) => t.key === this.active) }
 
   async openFile(path, { preview = true, line, focus = true } = {}) {
@@ -99,8 +116,10 @@ export class EditorGroup extends Emitter {
       this.editor.setModel(d.model)
       const vs = this.viewStates.get(key)
       if (vs) this.editor.restoreViewState(vs)
-    } else if (t?.kind === 'diff') {
+    } else if (t?.kind === 'diff' || t?.kind === 'gitdiff') {
       await this.showDiff(t)
+    } else if (t?.kind === 'browser' && this.browser) {
+      if (this.browser.el.parentElement !== this.browserHost) this.browserHost.replaceChildren(this.browser.el)
     }
     this.render()
     this.emit('active', t)
@@ -118,6 +137,7 @@ export class EditorGroup extends Emitter {
 
   async showDiff(t) {
     const de = this.ensureDiffEditor()
+    if (t.kind === 'gitdiff') return this.showGitDiff(t, de)
     let list = []
     try { list = await agentStore.changes(t.agentId) } catch { /* agent removed */ }
     const c = list.find((x) => x.path === t.path)
@@ -138,6 +158,26 @@ export class EditorGroup extends Emitter {
       h('button', { class: 'btn-ghost', onclick: () => this.openFile(t.path, { preview: false }) }, icon('go-to-file'), 'Open File'),
       pending ? h('button', { class: 'btn-ghost', onclick: () => agentStore.resolve(t.agentId, t.path, false) }, icon('discard'), 'Undo') : null,
       pending ? h('button', { class: 'btn-primary small', onclick: () => agentStore.resolve(t.agentId, t.path, true) }, icon('check'), 'Keep') : null,
+    )
+  }
+
+  async showGitDiff(t, de) {
+    const [{ content: head }, cur] = await Promise.all([
+      api.get('/api/git/show?path=' + encodeURIComponent(t.path)),
+      api.get('/api/file?path=' + encodeURIComponent(t.path)).then((r) => r.content).catch(() => ''),
+    ])
+    const lang = languageOf(t.path)
+    const old = de.getModel()
+    // modified side edits the live document when the file is open, so edits in the diff are real edits
+    const doc = await files.open(t.path).catch(() => null)
+    de.setModel({ original: monaco.editor.createModel(head ?? '', lang), modified: doc ? doc.model : monaco.editor.createModel(cur, lang) })
+    if (old) { old.original.dispose(); if (![...files.docs.values()].some((d) => d.model === old.modified)) old.modified.dispose() }
+    this.diffBar.replaceChildren(
+      icon('source-control'), h('span', { class: 'diff-title' }, basename(t.path)),
+      h('span', { class: 'muted' }, head === null ? ' — new file (untracked)' : ' — HEAD ↔ Working Tree'),
+      h('div', { class: 'flex1' }),
+      h('button', { class: 'btn-ghost', onclick: () => this.openFile(t.path, { preview: false }) }, icon('go-to-file'), 'Open File'),
+      h('button', { class: 'btn-ghost', onclick: async () => { await api.post('/api/git/stage', { paths: [t.path] }); bus.emit('git') } }, icon('add'), 'Stage'),
     )
   }
 
@@ -180,13 +220,16 @@ export class EditorGroup extends Emitter {
   render() {
     const t = this.activeTab()
     this.renderTabs()
-    const isDiff = t?.kind === 'diff'
-    this.editorHost.classList.toggle('hidden', !t || isDiff)
+    const isDiff = t?.kind === 'diff' || t?.kind === 'gitdiff'
+    const isBrowser = t?.kind === 'browser'
+    this.editorHost.classList.toggle('hidden', !t || isDiff || isBrowser)
     this.diffHost.classList.toggle('hidden', !isDiff)
+    this.browserHost.classList.toggle('hidden', !isBrowser)
+    this.breadcrumbs.classList.toggle('hidden', isBrowser || !this.showBreadcrumbs)
     this.diffBar.classList.toggle('hidden', !isDiff)
     this.welcome.classList.toggle('hidden', !!t)
     this.breadcrumbs.replaceChildren()
-    if (t) {
+    if (t && !isBrowser) {
       const parts = t.path.split('/')
       parts.forEach((p, i) => {
         if (i) this.breadcrumbs.append(icon('chevron-right', 'bc-sep'))
@@ -209,9 +252,9 @@ export class EditorGroup extends Emitter {
         onclick: () => this.activate(t.key),
         ondblclick: () => { t.preview = false; this.renderTabs() },
       },
-      t.kind === 'diff' ? icon('diff', 'file-icon diff-icon') : fileIcon(t.path),
+      t.kind === 'diff' ? icon('diff', 'file-icon diff-icon') : t.kind === 'gitdiff' ? icon('source-control', 'file-icon diff-icon') : t.kind === 'browser' ? icon('globe', 'file-icon') : fileIcon(t.path),
       h('span', { class: 'tab-label' }, basename(t.path)),
-      t.kind === 'diff' ? h('span', { class: 'tab-desc' }, 'Agent Diff') : this.needsDir(t) ? h('span', { class: 'tab-desc' }, dirname(t.path)) : null,
+      t.kind === 'diff' ? h('span', { class: 'tab-desc' }, 'Agent Diff') : t.kind === 'gitdiff' ? h('span', { class: 'tab-desc' }, 'Working Tree') : this.needsDir(t) ? h('span', { class: 'tab-desc' }, dirname(t.path)) : null,
       h('button', { class: 'tab-close', title: 'Close (Ctrl+W)', onclick: (e) => { e.stopPropagation(); this.closeTab(t.key) } }, icon(dirty ? 'circle-filled' : 'close')),
       )
       el.addEventListener('dragstart', (e) => { e.dataTransfer.setData('text/tab', t.key) })

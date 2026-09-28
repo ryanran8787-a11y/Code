@@ -82,6 +82,7 @@ class FileStore extends Emitter {
   }
 
   onFsEvent(e) {
+    if (e.scope && e.scope !== 'main') { this.emit('fs', e); return } // change inside an agent worktree
     clearTimeout(this._t)
     this._t = setTimeout(() => this.refreshTree(), 120)
     if (e.path && this.docs.has(e.path)) {

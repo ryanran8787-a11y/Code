@@ -1,6 +1,8 @@
 // Tool definitions (OpenAI function-calling schema) + implementations.
 import { minimatch } from './glob'
 import * as ws from './workspace'
+import * as procs from './processes'
+import { webFetch } from './browser'
 
 export const TOOL_SCHEMAS = [
   {
@@ -119,10 +121,44 @@ export const TOOL_SCHEMAS = [
       },
     },
   },
+  {
+    type: 'function',
+    function: {
+      name: 'start_background_process',
+      description: 'Start a long-running process (dev server, watcher) in the background. Returns an id; use read_process_output to check logs and detected ports, stop_process to stop it. Prefer this over run_terminal_command for servers.',
+      parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, wait_seconds: { type: 'integer', description: 'Seconds to wait before returning initial output (default 3)' } }, required: ['command'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'read_process_output',
+      description: 'Read recent output, status and listening ports of a background process started with start_background_process.',
+      parameters: { type: 'object', properties: { id: { type: 'string' }, tail_chars: { type: 'integer' } }, required: ['id'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'stop_process',
+      description: 'Stop a background process.',
+      parameters: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'fetch_url',
+      description: 'HTTP GET/POST a URL (e.g. a local dev server like http://localhost:5173) and return status, headers and body text (HTML is reduced to readable text plus a list of interactive elements). Use it to verify web pages or APIs you built.',
+      parameters: { type: 'object', properties: { url: { type: 'string' }, method: { type: 'string' }, body: { type: 'string' }, raw: { type: 'boolean', description: 'Return raw body instead of extracted text' } }, required: ['url'] },
+    },
+  },
 ] as const
 
 export type ToolContext = {
   agentId: string
+  /** file-system root the agent works in (main workspace or its git worktree) */
+  ws: ws.Workspace
   /** called before a file is modified for the first time so the agent can snapshot it */
   snapshot: (path: string) => Promise<void>
   onOutput: (chunk: string) => void
@@ -137,14 +173,14 @@ function trunc(s: string, n = 30_000) {
 export async function executeTool(name: string, args: any, ctx: ToolContext): Promise<{ result: string; meta?: any }> {
   switch (name) {
     case 'list_dir': {
-      const p = normalize(args.path)
-      const nodes = await ws.readTree(p, 0)
-      if (!nodes.length && !(await ws.fileExists(p))) throw new Error(`Directory not found: ${p || '.'}`)
+      const p = normalize(ctx, args.path)
+      const nodes = await ctx.ws.readTree(p, 0)
+      if (!nodes.length && !(await ctx.ws.fileExists(p))) throw new Error(`Directory not found: ${p || '.'}`)
       return { result: nodes.map((n) => (n.type === 'dir' ? n.name + '/' : n.name)).join('\n') || '(empty)' }
     }
     case 'read_file': {
-      const p = normalize(args.path)
-      const text = await ws.readFile(p)
+      const p = normalize(ctx, args.path)
+      const text = await ctx.ws.readFile(p)
       const lines = text.split('\n')
       const s = Math.max(1, args.start_line || 1)
       const e = Math.min(lines.length, args.end_line || lines.length)
@@ -152,19 +188,19 @@ export async function executeTool(name: string, args: any, ctx: ToolContext): Pr
       return { result: trunc(`File: ${p} (${lines.length} lines)\n${body}`), meta: { path: p, lines: lines.length, range: [s, e] } }
     }
     case 'grep_search': {
-      const hits = await ws.searchText(args.query, { regex: !!args.is_regex, include: args.include, max: 100 })
+      const hits = await ctx.ws.searchText(args.query, { regex: !!args.is_regex, include: args.include, max: 100 })
       return { result: hits.length ? hits.map((h) => `${h.path}:${h.line}: ${h.text}`).join('\n') : 'No matches.', meta: { count: hits.length } }
     }
     case 'file_search': {
-      const files = await ws.listFilesFlat()
+      const files = await ctx.ws.listFilesFlat()
       const pat = String(args.pattern || '')
       const hasGlob = /[*?[\]{}]/.test(pat)
       const res = files.filter((f) => (hasGlob ? minimatch(f, pat) : f.toLowerCase().includes(pat.toLowerCase()))).slice(0, 100)
       return { result: res.length ? res.join('\n') : 'No files found.', meta: { count: res.length } }
     }
     case 'edit_file': {
-      const p = normalize(args.path)
-      const before = await ws.readFile(p)
+      const p = normalize(ctx, args.path)
+      const before = await ctx.ws.readFile(p)
       const oldS = String(args.old_string ?? '')
       const newS = String(args.new_string ?? '')
       if (!oldS) throw new Error('old_string must not be empty (use write_file to create files)')
@@ -173,27 +209,27 @@ export async function executeTool(name: string, args: any, ctx: ToolContext): Pr
       if (count > 1 && !args.replace_all) throw new Error(`old_string occurs ${count} times in ${p}; add more context or set replace_all.`)
       await ctx.snapshot(p)
       const after = args.replace_all ? before.split(oldS).join(newS) : before.replace(oldS, () => newS)
-      await ws.writeFile(p, after, `agent:${ctx.agentId}`)
+      await ctx.ws.writeFile(p, after, `agent:${ctx.agentId}`)
       return { result: `Edited ${p} (${count} replacement${count > 1 ? 's' : ''}).`, meta: { path: p, ...lineStats(before, after) } }
     }
     case 'write_file': {
-      const p = normalize(args.path)
-      const existed = await ws.fileExists(p)
-      const before = existed ? await ws.readFile(p).catch(() => '') : ''
+      const p = normalize(ctx, args.path)
+      const existed = await ctx.ws.fileExists(p)
+      const before = existed ? await ctx.ws.readFile(p).catch(() => '') : ''
       await ctx.snapshot(p)
-      await ws.writeFile(p, String(args.content ?? ''), `agent:${ctx.agentId}`)
+      await ctx.ws.writeFile(p, String(args.content ?? ''), `agent:${ctx.agentId}`)
       return { result: `${existed ? 'Overwrote' : 'Created'} ${p}.`, meta: { path: p, created: !existed, ...lineStats(before, String(args.content ?? '')) } }
     }
     case 'delete_file': {
-      const p = normalize(args.path)
-      if (!(await ws.fileExists(p))) throw new Error(`File not found: ${p}`)
+      const p = normalize(ctx, args.path)
+      if (!(await ctx.ws.fileExists(p))) throw new Error(`File not found: ${p}`)
       await ctx.snapshot(p)
-      await ws.deletePath(p, `agent:${ctx.agentId}`)
+      await ctx.ws.deletePath(p, `agent:${ctx.agentId}`)
       return { result: `Deleted ${p}.`, meta: { path: p } }
     }
     case 'run_terminal_command': {
-      const r = await ws.runCommand(String(args.command), {
-        cwd: normalize(args.cwd || ''),
+      const r = await ctx.ws.runCommand(String(args.command), {
+        cwd: normalize(ctx, args.cwd || ''),
         timeoutMs: Math.min(300, args.timeout_seconds || 60) * 1000,
         onData: ctx.onOutput,
         signal: ctx.signal,
@@ -205,16 +241,37 @@ export async function executeTool(name: string, args: any, ctx: ToolContext): Pr
       ctx.setTodos(Array.isArray(args.todos) ? args.todos : [])
       return { result: 'Todo list updated.' }
     }
+    case 'start_background_process': {
+      const cwd = ctx.ws.resolve(normalize(ctx, args.cwd || ''))
+      const p = procs.start(String(args.command), cwd, ctx.agentId)
+      await procs.waitFor(p.id, Math.min(30, args.wait_seconds ?? 3) * 1000)
+      return { result: `Started process ${p.id} (${p.status}${p.exitCode !== null ? ', exit ' + p.exitCode : ''}). Ports: ${p.ports.join(', ') || 'none detected yet'}\n--- output ---\n${p.output.slice(-4000)}`, meta: { procId: p.id, ports: p.ports } }
+    }
+    case 'read_process_output': {
+      const p = procs.get(String(args.id))
+      if (!p) throw new Error('No such process: ' + args.id)
+      return { result: `Process ${p.id}: ${p.status}${p.exitCode !== null ? ' (exit ' + p.exitCode + ')' : ''}; ports: ${p.ports.join(', ') || 'none'}\n--- output ---\n${p.output.slice(-(args.tail_chars || 6000))}`, meta: { procId: p.id, ports: p.ports } }
+    }
+    case 'stop_process': {
+      procs.stop(String(args.id))
+      await procs.waitFor(String(args.id), 3500)
+      return { result: `Stopped ${args.id}.` }
+    }
+    case 'fetch_url': {
+      const r = await webFetch(String(args.url), { method: args.method, body: args.body, raw: !!args.raw, signal: ctx.signal })
+      return { result: trunc(r.text, 20_000), meta: { status: r.status, url: r.url } }
+    }
     default:
       throw new Error(`Unknown tool: ${name}`)
   }
 }
 
-function normalize(p: string) {
+function normalize(ctx: ToolContext, p: string) {
   let s = String(p ?? '').trim().replace(/\\/g, '/')
   if (s === '.' || s === './') return ''
   s = s.replace(/^\.\//, '')
-  if (s.startsWith(ws.WORKSPACE_ROOT)) s = s.slice(ws.WORKSPACE_ROOT.length)
+  if (s.startsWith(ctx.ws.root)) s = s.slice(ctx.ws.root.length)
+  else if (s.startsWith(ws.WORKSPACE_ROOT)) s = s.slice(ws.WORKSPACE_ROOT.length)
   return s.replace(/^\/+/, '').replace(/\/+$/, '')
 }
 

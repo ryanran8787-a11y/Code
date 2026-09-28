@@ -14,6 +14,11 @@ export type Settings = {
   autoRunCommands: boolean
   maxSteps: number
   temperature: number | null
+  /** approximate context window of the model, in tokens (used for compaction + meter) */
+  contextWindow: number
+  /** compact when the prompt exceeds this fraction of contextWindow */
+  compactAt: number
+  defaultEnv: 'local' | 'worktree'
 }
 
 function fromGensparkYaml(): { apiKey?: string; baseUrl?: string } {
@@ -34,6 +39,9 @@ const defaults: Settings = {
   autoRunCommands: false,
   maxSteps: 40,
   temperature: null,
+  contextWindow: Number(process.env.CONTEXT_WINDOW || 128000),
+  compactAt: 0.8,
+  defaultEnv: 'local',
 }
 
 let current: Settings = { ...defaults }
