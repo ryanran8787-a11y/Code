@@ -14,6 +14,7 @@ class AgentStore extends Emitter {
     bus.on('agent.item', (e) => this.onItem(e))
     bus.on('agent.delta', (e) => this.onDelta(e))
     bus.on('agent.changes', (e) => this.emit('changes', e.agentId))
+    bus.on('fs', (e) => { if (e.scope?.startsWith('wt:')) this.emit('changes', e.scope.slice(3)) })
     bus.on('connection', (ok) => { if (ok) this.resync() })
   }
 
@@ -70,7 +71,7 @@ class AgentStore extends Emitter {
   }
 
   async create(prompt, opts = {}) {
-    const s = await api.post('/api/agents', { prompt, model: opts.model, mode: opts.mode })
+    const s = await api.post('/api/agents', { prompt, model: opts.model, mode: opts.mode, env: opts.env })
     this.upsert(s)
     await this.load(s.id, true)
     return s

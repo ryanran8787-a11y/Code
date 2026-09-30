@@ -13,6 +13,8 @@ import { h, icon, sash, timeAgo, basename, fileIcon, lineDiffStats, toast } from
 import { Emitter } from './api.js'
 import { contextMenu } from './explorer.js'
 import { inputBox } from './palette.js'
+import { BrowserView } from './browser.js'
+import { api } from './api.js'
 
 export class AgentsWindow extends Emitter {
   constructor({ workspace }) {
@@ -31,9 +33,11 @@ export class AgentsWindow extends Emitter {
     this.tabStrip = h('div', { class: 'aw-tabs' })
     this.stage = h('div', { class: 'aw-stage' })
     this.review = new EditorGroup({ id: 'review', showBreadcrumbs: false })
+    this.browser = new BrowserView({ onDesignPrompt: (t) => this.designPrompt(t) })
+    this.browserHost = h('div', { class: 'aw-browser-host hidden' }, this.browser.el)
     this.reviewList = h('div', { class: 'aw-review-list' })
     this.reviewTabs = h('div', { class: 'aw-review-head' })
-    this.reviewPanel = h('div', { class: 'aw-review' }, this.reviewTabs, this.reviewList, this.review.el)
+    this.reviewPanel = h('div', { class: 'aw-review' }, this.reviewTabs, this.reviewList, this.review.el, this.browserHost)
     this.reviewSash = h('div', { class: 'sash sash-v' })
     this.reviewMode = 'changes'
     this.center = h('div', { class: 'aw-center' }, h('div', { class: 'aw-topbar' }, this.tabStrip, h('div', { class: 'aw-layout-btns' })), this.stage)
@@ -120,6 +124,22 @@ export class AgentsWindow extends Emitter {
     this.renderReviewList()
     await this.review.openDiff(agentId, path)
   }
+  openBrowser(url) {
+    this.toggleReview(true)
+    this.reviewMode = 'browser'
+    if (url) this.browser.navigate(url)
+    this.renderReviewList()
+  }
+
+  /** Design Mode → put the structured request into the focused agent's composer. */
+  designPrompt(text) {
+    const pane = this.panes[this.visibleTabs().indexOf(this.focusedAgent())] || this.panes[0]
+    if (!pane) return
+    pane.composer.input.value = text
+    pane.composer.autosize()
+    pane.composer.focus()
+  }
+
   async openFile(path, o = {}) {
     this.toggleReview(true)
     this.reviewMode = 'files'
@@ -166,7 +186,7 @@ export class AgentsWindow extends Emitter {
     },
     h('span', { class: `status-dot ${st.cls}`, title: st.label }, icon(st.icon, a.status === 'running' ? 'codicon-modifier-spin' : '')),
     h('div', { class: 'aw-item-main' },
-      h('div', { class: 'aw-item-title' }, a.title),
+      h('div', { class: 'aw-item-title' }, a.env === 'worktree' ? h('span', { class: 'wt-dot', title: 'Worktree: ' + (a.branch || '') }, icon('git-branch')) : null, a.title),
       h('div', { class: 'aw-item-sub' },
         a.status === 'awaiting_approval' ? h('span', { class: 'warn' }, 'Needs approval') : a.todos?.length ? `${a.todos.filter((t) => t.status === 'completed').length}/${a.todos.length} to-dos` : (a.lastMessage || '').replace(/[#*`>\n]/g, ' ').slice(0, 60)),
     ),
@@ -255,14 +275,21 @@ export class AgentsWindow extends Emitter {
     let changes = []
     if (id) { try { changes = await agentStore.changes(id) } catch { /* gone */ } }
     const pending = changes.filter((c) => c.status === 'pending')
-    this.reviewTabs.replaceChildren(tab('changes', `Changes${pending.length ? ' ' + pending.length : ''}`, 'diff'), tab('files', 'Files', 'files'), h('div', { class: 'flex1' }),
+    this.reviewTabs.replaceChildren(tab('changes', `Changes${pending.length ? ' ' + pending.length : ''}`, 'diff'), tab('files', 'Files', 'files'), tab('browser', 'Browser', 'globe'), h('div', { class: 'flex1' }),
       h('button', { class: 'icon-btn', title: 'Close', onclick: () => this.toggleReview(false) }, icon('close')))
+    const isBrowser = this.reviewMode === 'browser'
+    this.browserHost.classList.toggle('hidden', !isBrowser)
+    this.review.el.classList.toggle('hidden', isBrowser)
+    this.reviewList.classList.toggle('hidden', isBrowser)
+    if (isBrowser) return
     if (this.reviewMode === 'files') {
       this.reviewList.replaceChildren(h('div', { class: 'aw-files' }, ...files.flat.slice(0, 400).map((p) => h('div', { class: 'aw-file', onclick: () => this.review.openFile(p) }, fileIcon(p), h('span', {}, basename(p)), h('span', { class: 'muted small' }, p)))))
       return
     }
     if (!id) { this.reviewList.replaceChildren(h('div', { class: 'empty-note' }, 'Changes made by the selected agent appear here.')); return }
     if (!changes.length) { this.reviewList.replaceChildren(h('div', { class: 'empty-note' }, 'This agent has not changed any files yet.')); return }
+    const ag = agentStore.get(id)
+    const wt = ag?.env === 'worktree'
     let add = 0, rem = 0
     const rows = changes.map((c) => {
       const s = lineDiffStats(c.original ?? '', c.current ?? '')
@@ -272,12 +299,14 @@ export class AgentsWindow extends Emitter {
         h('div', { class: 'flex1' }),
         c.status !== 'pending' ? h('span', { class: 'diff-status ' + c.status }, c.status) : [h('span', { class: 'plus' }, '+' + s.added), h('span', { class: 'minus' }, '-' + s.removed),
           h('button', { class: 'icon-btn', title: 'Undo', onclick: (e) => { e.stopPropagation(); agentStore.resolve(id, c.path, false) } }, icon('discard')),
-          h('button', { class: 'icon-btn', title: 'Keep', onclick: (e) => { e.stopPropagation(); agentStore.resolve(id, c.path, true) } }, icon('check'))])
+          h('button', { class: 'icon-btn', title: wt ? 'Apply to workspace' : 'Keep', onclick: (e) => { e.stopPropagation(); agentStore.resolve(id, c.path, true).catch((er) => toast(er.message, 'error')) } }, icon('check'))])
     })
     this.reviewList.replaceChildren(
+      wt ? h('div', { class: 'aw-wt-bar' }, icon('git-branch'), h('code', {}, ag.branch), h('span', { class: 'muted small' }, 'isolated worktree'), h('div', { class: 'flex1' }),
+        h('button', { class: 'btn-ghost', title: 'Commit the agent\'s work on its own branch', onclick: async () => { try { await api.post(`/api/agents/${id}/worktree/commit`, { message: ag.title }); toast('Committed on ' + ag.branch) } catch (e) { toast(e.message, 'error') } } }, icon('git-commit'), 'Commit Branch')) : null,
       pending.length ? h('div', { class: 'aw-review-actions' }, h('span', {}, `${pending.length} pending`), h('span', { class: 'plus' }, '+' + add), h('span', { class: 'minus' }, '-' + rem), h('div', { class: 'flex1' }),
-        h('button', { class: 'btn-ghost', onclick: () => agentStore.resolve(id, null, false) }, 'Undo All'),
-        h('button', { class: 'btn-primary small', onclick: () => agentStore.resolve(id, null, true) }, 'Keep All')) : null,
+        h('button', { class: 'btn-ghost', onclick: () => agentStore.resolve(id, null, false).catch((e) => toast(e.message, 'error')) }, wt ? 'Discard All' : 'Undo All'),
+        h('button', { class: 'btn-primary small', onclick: () => agentStore.resolve(id, null, true).then(() => wt && toast('Applied to workspace')).catch((e) => toast(e.message, 'error')) }, wt ? 'Apply to Workspace' : 'Keep All')) : null,
       ...rows)
     if (!this.review.activeTab() && changes[0]) this.review.openDiff(id, changes[0].path)
   }

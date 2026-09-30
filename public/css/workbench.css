@@ -457,3 +457,90 @@ button.sb-remote:hover { background: var(--accent); filter: brightness(1.15); co
 .aw-placeholder-btn { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 24px 40px; border: 1px dashed var(--border); border-radius: 12px; color: var(--fg); }
 .aw-placeholder-btn .codicon { font-size: 22px; }
 .aw-placeholder-btn:hover { border-color: #4a4b4e; background: var(--bg2); color: var(--fg-strong); }
+
+/* ======================= v2: terminal / scm / browser / worktrees / mentions ======================= */
+.panel-body { flex: 1; min-height: 0; display: flex; }
+.terminal-panel { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.term-stage { flex: 1; min-width: 0; min-height: 0; padding: 2px 0 0 12px; }
+.xterm-host { width: 100%; height: 100%; }
+.xterm-host .xterm { height: 100%; }
+.xterm .xterm-viewport { background-color: transparent !important; }
+.term-list { width: 170px; border-left: 1px solid var(--border); overflow: auto; flex: none; }
+.term-item { display: flex; align-items: center; gap: 6px; padding: 3px 4px 3px 10px; cursor: pointer; font-size: 12px; }
+.term-item:hover { background: var(--hover); }
+.term-item.active { background: var(--selected); color: var(--fg-strong); }
+.term-item .icon-btn { visibility: hidden; width: 20px; height: 20px; }
+.term-item:hover .icon-btn { visibility: visible; }
+
+.ports { flex: 1; overflow: auto; padding: 4px 12px; font-size: 12px; }
+.ports-head { display: flex; align-items: center; padding: 4px 0 8px; }
+.port-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; border-bottom: 1px solid #ffffff08; }
+.port-row.exited { opacity: .6; }
+.port-cmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 40%; }
+.port-chip { display: inline-flex; align-items: center; gap: 4px; font: 11px var(--mono); padding: 1px 7px; border-radius: 10px; background: #3fb95022; color: #7ee2a8; }
+.port-chip:hover { background: #3fb95040; }
+.port-out { margin: 2px 0 8px 22px; max-height: 200px; overflow: auto; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font: 11px/1.45 var(--mono); white-space: pre-wrap; }
+
+.scm-body { flex: 1; overflow: auto; padding-bottom: 20px; }
+.scm-branch { display: flex; align-items: center; gap: 6px; padding: 2px 16px 6px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.scm-branch:hover { color: var(--fg-strong); }
+.scm-commit { padding: 0 12px 8px; display: flex; flex-direction: column; gap: 6px; }
+.scm-msg { background: var(--vscode-input-background, #191a1b); border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px; resize: none; outline: none; min-height: 30px; line-height: 1.4; }
+.scm-msg:focus { border-color: var(--focus); }
+.scm-commit-btn { justify-content: center; }
+.scm-commit-btn:disabled { opacity: .5; cursor: default; }
+.scm-init { padding: 0 16px; }
+.scm-group-head { display: flex; align-items: center; gap: 4px; height: 24px; padding: 0 8px 0 6px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; color: var(--fg); }
+.scm-group-head .icon-btn { width: 20px; height: 20px; visibility: hidden; }
+.scm-group-head:hover .icon-btn { visibility: visible; }
+.scm-count { background: var(--bg3); border-radius: 8px; padding: 0 6px; font-size: 10px; font-weight: 400; }
+.scm-row { display: flex; align-items: center; gap: 5px; height: 22px; padding: 0 10px 0 22px; cursor: pointer; white-space: nowrap; }
+.scm-row:hover { background: var(--hover); }
+.scm-name.deleted { text-decoration: line-through; }
+.scm-actions { display: none; gap: 1px; }
+.scm-row:hover .scm-actions { display: inline-flex; }
+.scm-actions .icon-btn { width: 20px; height: 20px; }
+.scm-letter { width: 14px; text-align: center; font-weight: 600; font-size: 12px; flex: none; }
+.scm-commit-row { display: flex; align-items: center; gap: 6px; padding: 2px 10px 2px 22px; font-size: 12px; color: var(--fg); }
+.ell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.browser { display: flex; flex-direction: column; height: 100%; width: 100%; background: var(--bg); }
+.browser-bar { display: flex; align-items: center; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--border); background: var(--bg2); flex: none; }
+.browser-addr { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 14px; padding: 3px 12px; outline: none; font-size: 12px; margin: 0 4px; }
+.browser-addr:focus { border-color: var(--focus); }
+.browser-body { flex: 1; min-height: 0; position: relative; }
+.browser-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+.browser-empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; background: var(--bg); color: var(--fg); }
+.browser-empty .big { font-size: 40px !important; color: var(--muted); }
+.browser-empty.hidden { display: none; }
+.browser-console { max-height: 120px; overflow: auto; border-top: 1px solid var(--border); font: 11.5px var(--mono); background: #f851490d; flex: none; }
+.console-line { display: flex; gap: 6px; padding: 2px 10px; color: #ffb4ab; }
+.design-card { position: absolute; right: 12px; bottom: 12px; width: min(380px, calc(100% - 24px)); background: var(--bg3); border: 1px solid #4daafc88; border-radius: 10px; box-shadow: 0 10px 30px #000a; padding: 10px; display: flex; flex-direction: column; gap: 6px; z-index: 3; }
+.design-head { display: flex; align-items: center; gap: 6px; color: #4daafc; }
+.design-head code { color: var(--fg-strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.design-text { font-size: 12px; color: var(--fg); background: var(--bg); border-radius: 5px; padding: 4px 6px; }
+.design-note { background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; resize: none; outline: none; }
+.design-note:focus { border-color: var(--focus); }
+.design-actions { display: flex; justify-content: flex-end; }
+.aw-browser-host { flex: 1; min-height: 0; display: flex; }
+
+.env-pill.wt { background: #a371f722; color: #d2a8ff; }
+.env-pill.locked { opacity: .75; cursor: default; }
+.wt-badge { display: inline-flex; align-items: center; gap: 3px; font: 11px var(--mono); color: #d2a8ff; background: #a371f71a; border-radius: 10px; padding: 0 7px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; }
+.wt-badge .codicon { font-size: 12px; }
+.wt-dot { color: #d2a8ff; margin-right: 4px; }
+.wt-dot .codicon { font-size: 12px; vertical-align: -2px; }
+.aw-wt-bar { display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12px; color: #d2a8ff; }
+.chat-usage { color: var(--muted); font-size: 11px; white-space: nowrap; }
+.ctx-meter { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); margin-right: 4px; cursor: default; }
+.ctx-meter.warn { color: var(--warn); }
+.ctx-meter .ring { width: 12px; height: 12px; border-radius: 50%; -webkit-mask: radial-gradient(circle 3px, transparent 98%, #000 100%); mask: radial-gradient(circle 3px, transparent 98%, #000 100%); }
+
+.composer { position: relative; }
+.mention-menu { position: absolute; left: 8px; right: 8px; bottom: calc(100% + 6px); max-height: 300px; overflow: auto; background: var(--bg3); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 -8px 30px #0008; padding: 4px; z-index: 20; }
+.mm-sep { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); padding: 6px 8px 2px; }
+.mm-item { display: flex; align-items: center; gap: 7px; padding: 3px 8px; border-radius: 5px; cursor: pointer; white-space: nowrap; }
+.mm-item.sel { background: #297aa055; }
+.mm-label { color: var(--fg-strong); }
+.mm-desc { color: var(--muted); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; }
+.chip-folder .codicon { color: #e2c08d; } .chip-symbol .codicon { color: #b180d7; } .chip-terminal .codicon, .chip-browser .codicon { color: #4daafc; }

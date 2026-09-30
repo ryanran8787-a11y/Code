@@ -2,6 +2,7 @@
 // terminal output, approvals, todos) plus the composer. Used by the Agents
 // Window main pane and by the Editor Window's secondary side bar.
 import { agentStore, STATUS } from './agent-store.js'
+import { api } from './api.js'
 import { files } from './files.js'
 import { h, icon, renderMarkdown, basename, fileIcon, lineDiffStats, toast } from './util.js'
 
@@ -15,32 +16,42 @@ const TOOL_META = {
   delete_file: { icon: 'trash', verb: 'Deleted', running: 'Deleting' },
   run_terminal_command: { icon: 'terminal', verb: 'Ran', running: 'Running' },
   update_todos: { icon: 'checklist', verb: 'Updated todos', running: 'Updating todos' },
+  start_background_process: { icon: 'server-process', verb: 'Started', running: 'Starting' },
+  read_process_output: { icon: 'output', verb: 'Read output of', running: 'Reading output of' },
+  stop_process: { icon: 'debug-stop', verb: 'Stopped', running: 'Stopping' },
+  fetch_url: { icon: 'globe', verb: 'Fetched', running: 'Fetching' },
 }
 
 export class Composer {
-  constructor({ placeholder = 'Plan, search, build anything…', onSubmit, onStop, compact = false, autofocus = false }) {
+  constructor({ placeholder = 'Plan, search, build anything…  (@ to mention files, folders, symbols)', onSubmit, onStop, compact = false, autofocus = false }) {
     this.onSubmit = onSubmit
     this.onStop = onStop
     this.mode = localStorage.getItem('composer.mode') || 'agent'
+    this.env = localStorage.getItem('composer.env') || agentStore.settings?.defaultEnv || 'local'
     this.model = localStorage.getItem('composer.model') || agentStore.settings?.defaultModel || ''
     this.busy = false
+    this.isNew = true
     this.input = h('textarea', { class: 'composer-input', rows: 1, placeholder, spellcheck: 'false' })
-    this.input.addEventListener('input', () => this.autosize())
+    this.input.addEventListener('input', () => { this.autosize(); this.updateMention() })
     this.input.addEventListener('keydown', (e) => {
+      if (this.menu && this.onMenuKey(e)) return
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); this.submit() }
       if (e.key === 'Escape' && this.busy) { e.preventDefault(); this.onStop?.() }
     })
+    this.input.addEventListener('blur', () => setTimeout(() => this.closeMenu(), 150))
     this.modeBtn = h('button', { class: 'composer-pill', title: 'Mode (Agent can edit files & run commands, Ask is read-only)', onclick: () => this.toggleMode() })
+    this.envBtn = h('button', { class: 'composer-pill env-pill', title: 'Where the new agent runs: Local = edits your workspace directly; Worktree = isolated git worktree + branch, merge when done', onclick: () => this.toggleEnv() })
     this.modelSel = h('select', { class: 'composer-model', title: 'Model' })
     this.modelSel.addEventListener('change', () => { this.model = this.modelSel.value; localStorage.setItem('composer.model', this.model) })
     this.sendBtn = h('button', { class: 'composer-send', title: 'Send (Enter)', onclick: () => (this.busy ? this.onStop?.() : this.submit()) })
-    this.mentionBtn = h('button', { class: 'composer-icon-btn', title: 'Add file context (@)', onclick: () => this.pickFile() }, icon('mention'))
+    this.mentionBtn = h('button', { class: 'composer-icon-btn', title: 'Add context (@)', onclick: () => this.insertAt() }, icon('mention'))
+    this.meter = h('span', { class: 'ctx-meter hidden' })
     this.chips = h('div', { class: 'composer-chips' })
-    this.context = []
+    this.context = [] // {type:'file'|'folder'|'symbol'|'terminal'|'browser', value, label}
     this.el = h('div', { class: 'composer' + (compact ? ' compact' : '') },
       this.chips,
       this.input,
-      h('div', { class: 'composer-bar' }, this.modeBtn, this.modelSel, h('div', { class: 'flex1' }), this.mentionBtn, this.sendBtn),
+      h('div', { class: 'composer-bar' }, this.modeBtn, this.envBtn, this.modelSel, h('div', { class: 'flex1' }), this.meter, this.mentionBtn, this.sendBtn),
     )
     this.refreshModels()
     this.renderMode()
@@ -53,8 +64,14 @@ export class Composer {
     this.modelSel.replaceChildren(...models.map((m) => h('option', { value: m, selected: m === this.model }, m)))
   }
   toggleMode() { this.mode = this.mode === 'agent' ? 'ask' : 'agent'; localStorage.setItem('composer.mode', this.mode); this.renderMode() }
+  toggleEnv() { if (!this.isNew) return; this.env = this.env === 'local' ? 'worktree' : 'local'; localStorage.setItem('composer.env', this.env); this.renderMode() }
+  setNew(isNew, agent) { this.isNew = isNew; this.agentEnv = agent?.env; this.renderMode() }
   renderMode() {
     this.modeBtn.replaceChildren(icon(this.mode === 'agent' ? 'infinity' : 'comment-discussion'), h('span', {}, this.mode === 'agent' ? 'Agent' : 'Ask'), icon('chevron-down', 'small'))
+    const env = this.isNew ? this.env : this.agentEnv || 'local'
+    this.envBtn.replaceChildren(icon(env === 'worktree' ? 'git-branch' : 'device-desktop'), h('span', {}, env === 'worktree' ? 'Worktree' : 'Local'))
+    this.envBtn.classList.toggle('locked', !this.isNew)
+    this.envBtn.classList.toggle('wt', env === 'worktree')
   }
   setBusy(b) {
     this.busy = b
@@ -62,27 +79,137 @@ export class Composer {
     this.sendBtn.classList.toggle('stop', b)
     this.sendBtn.title = b ? 'Stop (Esc)' : 'Send (Enter)'
   }
+  setUsage(a) {
+    if (!a || !a.contextWindow || !a.contextTokens) { this.meter.classList.add('hidden'); return }
+    const used = a.contextTokens
+    const pct = Math.min(100, Math.max(1, Math.round((used / a.contextWindow) * 100)))
+    this.meter.classList.remove('hidden')
+    this.meter.classList.toggle('warn', pct >= 70)
+    this.meter.title = `Context: ~${used.toLocaleString()} / ${a.contextWindow.toLocaleString()} tokens (${pct}%)\nTotal usage: ${(a.usage?.prompt || 0).toLocaleString()} in · ${(a.usage?.completion || 0).toLocaleString()} out\nOlder turns are summarized automatically near the limit.`
+    this.meter.replaceChildren(h('span', { class: 'ring', style: { background: `conic-gradient(currentColor ${pct * 3.6}deg, #ffffff22 0)` } }), `${pct}%`)
+  }
   autosize() { this.input.style.height = 'auto'; this.input.style.height = Math.min(this.input.scrollHeight, 260) + 'px' }
-  addContext(path) {
-    if (this.context.includes(path)) return
-    this.context.push(path)
+
+  // ---------------- context chips ----------------
+  addContext(item) {
+    if (typeof item === 'string') item = item.endsWith('/') ? { type: 'folder', value: item, label: item } : { type: 'file', value: item, label: basename(item) }
+    if (this.context.some((c) => c.type === item.type && c.value === item.value)) return
+    this.context.push(item)
     this.renderChips()
   }
   renderChips() {
-    this.chips.replaceChildren(...this.context.map((p) => h('span', { class: 'chip', title: p }, fileIcon(p), basename(p),
-      h('button', { class: 'chip-x', onclick: () => { this.context = this.context.filter((x) => x !== p); this.renderChips() } }, icon('close')))))
+    const ic = (c) => c.type === 'file' ? fileIcon(c.value) : icon(c.type === 'folder' ? 'folder' : c.type === 'symbol' ? 'symbol-method' : c.type === 'terminal' ? 'terminal' : 'globe')
+    this.chips.replaceChildren(...this.context.map((c) => h('span', { class: 'chip chip-' + c.type, title: c.value }, ic(c), c.label,
+      h('button', { class: 'chip-x', onclick: () => { this.context = this.context.filter((x) => x !== c); this.renderChips() } }, icon('close')))))
   }
-  async pickFile() {
-    const { quickPick } = await import('./palette.js')
-    const p = await quickPick(files.flat.map((f) => ({ label: basename(f), description: f, value: f, icon: fileIcon(f) })), { placeholder: 'Add file to context' })
-    if (p) this.addContext(p)
+
+  // ---------------- @ mention popup ----------------
+  insertAt() {
+    const pos = this.input.selectionStart ?? this.input.value.length
+    const v = this.input.value
+    const pre = pos > 0 && !/\s/.test(v[pos - 1]) ? ' @' : '@'
+    this.input.value = v.slice(0, pos) + pre + v.slice(pos)
     this.input.focus()
+    this.input.setSelectionRange(pos + pre.length, pos + pre.length)
+    this.updateMention()
   }
-  submit() {
+  mentionQuery() {
+    const pos = this.input.selectionStart
+    const m = /(^|\s)@([^\s@]*)$/.exec(this.input.value.slice(0, pos))
+    return m ? { q: m[2], start: pos - m[2].length - 1, end: pos } : null
+  }
+  async updateMention() {
+    const mq = this.mentionQuery()
+    if (!mq) return this.closeMenu()
+    const q = mq.q.toLowerCase()
+    const seq = (this._seq = (this._seq || 0) + 1)
+    const fuzzy = (s) => { let i = 0; s = s.toLowerCase(); for (const ch of q) { i = s.indexOf(ch, i); if (i < 0) return false; i++ } return true }
+    const specials = [
+      { type: 'terminal', value: 'terminal', label: 'Terminal output', desc: 'latest background process output', icon: icon('terminal') },
+      { type: 'browser', value: 'browser', label: 'Browser page', desc: 'page open in the integrated browser', icon: icon('globe') },
+    ].filter((x) => !q || x.label.toLowerCase().includes(q))
+    const fileItems = files.flat.filter((f) => !q || fuzzy(f))
+      .sort((a, b) => (basename(a).toLowerCase().startsWith(q) ? 0 : 1) - (basename(b).toLowerCase().startsWith(q) ? 0 : 1)).slice(0, 8)
+      .map((f) => ({ type: 'file', value: f, label: basename(f), desc: f, icon: fileIcon(f) }))
+    const dirs = [...new Set(files.flat.flatMap((f) => { const p = f.split('/').slice(0, -1); return p.map((_, i) => p.slice(0, i + 1).join('/')) }))]
+    const dirItems = dirs.filter((d) => !q || fuzzy(d)).slice(0, 4).map((d) => ({ type: 'folder', value: d + '/', label: basename(d) + '/', desc: d + '/', icon: icon('folder') }))
+    this.renderMenu([...fileItems, ...dirItems, ...specials], mq)
+    if (q.length >= 1) {
+      try {
+        const syms = await api.get('/api/symbols?q=' + encodeURIComponent(mq.q))
+        if (seq !== this._seq || !this.menu) return
+        const kindIcon = { class: 'symbol-class', interface: 'symbol-interface', heading: 'symbol-string', variable: 'symbol-variable', enum: 'symbol-enum' }
+        const symItems = syms.slice(0, 8).map((s) => ({ type: 'symbol', value: `${s.path}:${s.line}`, label: s.name, desc: `${s.kind} · ${s.path}:${s.line}`, icon: icon(kindIcon[s.kind] || 'symbol-method') }))
+        this.renderMenu([...fileItems, ...dirItems, ...symItems, ...specials], mq)
+      } catch { /* ignore */ }
+    }
+  }
+  renderMenu(items, mq) {
+    if (!items.length) return this.closeMenu()
+    if (!this.menu) { this.menu = h('div', { class: 'mention-menu' }); this.el.append(this.menu) }
+    this.menuItems = items
+    this.menuMq = mq
+    this.menuSel = Math.min(this.menuSel || 0, items.length - 1)
+    const group = { file: 'Files', folder: 'Folders', symbol: 'Symbols', terminal: 'Other', browser: 'Other' }
+    let last = null
+    this.menu.replaceChildren(...items.flatMap((it, i) => {
+      const out = []
+      if (group[it.type] !== last) { last = group[it.type]; out.push(h('div', { class: 'mm-sep' }, last)) }
+      out.push(h('div', { class: 'mm-item' + (i === this.menuSel ? ' sel' : ''), dataset: { type: it.type, value: it.value }, onmousedown: (e) => { e.preventDefault(); this.pickMention(i) }, onmousemove: () => { if (this.menuSel !== i) { this.menuSel = i; this.markMenu() } } },
+        it.icon, h('span', { class: 'mm-label' }, it.label), h('span', { class: 'mm-desc' }, it.desc)))
+      return out
+    }))
+  }
+  markMenu() {
+    const els = this.menu?.querySelectorAll('.mm-item') || []
+    els.forEach((el, i) => el.classList.toggle('sel', i === this.menuSel))
+    els[this.menuSel]?.scrollIntoView({ block: 'nearest' })
+  }
+  onMenuKey(e) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); this.menuSel = Math.min(this.menuItems.length - 1, this.menuSel + 1); this.markMenu(); return true }
+    if (e.key === 'ArrowUp') { e.preventDefault(); this.menuSel = Math.max(0, this.menuSel - 1); this.markMenu(); return true }
+    if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); this.pickMention(this.menuSel); return true }
+    if (e.key === 'Escape') { e.preventDefault(); this.closeMenu(); return true }
+    return false
+  }
+  pickMention(i) {
+    const it = this.menuItems?.[i]; const mq = this.menuMq
+    if (!it) return
+    const v = this.input.value
+    this.input.value = v.slice(0, mq.start) + v.slice(mq.end)
+    this.input.setSelectionRange(mq.start, mq.start)
+    this.addContext({ type: it.type, value: it.value, label: it.label })
+    this.closeMenu()
+    this.autosize()
+  }
+  closeMenu() { this.menu?.remove(); this.menu = null; this.menuSel = 0 }
+  pickFile() { this.insertAt() }
+
+  /** Expand chips into textual context for the model. */
+  async expandContext() {
+    const parts = []
+    for (const c of this.context) {
+      if (c.type === 'file') parts.push(`- File: \`${c.value}\``)
+      else if (c.type === 'folder') {
+        const inside = files.flat.filter((f) => f.startsWith(c.value)).slice(0, 60)
+        parts.push(`- Folder: \`${c.value}\` containing:\n${inside.map((f) => '  - ' + f).join('\n')}`)
+      } else if (c.type === 'symbol') parts.push(`- Symbol \`${c.label}\` defined at \`${c.value}\``)
+      else if (c.type === 'terminal') {
+        let out = ''
+        try { const ps = await api.get('/api/processes'); if (ps[0]) out = `Process \`${ps[0].command}\` (${ps[0].status}):\n${ps[0].tail.slice(-3000)}` } catch { /* */ }
+        parts.push('- Terminal output:\n```\n' + (out || '(no background process output available)') + '\n```')
+      } else if (c.type === 'browser') {
+        const url = localStorage.getItem('browser.url')
+        parts.push(url ? `- Browser page: http://${url} (use fetch_url to inspect it)` : '- Browser page: (none open)')
+      }
+    }
+    return parts.length ? '\n\nContext:\n' + parts.join('\n') : ''
+  }
+  async submit() {
     let text = this.input.value.trim()
     if (!text || this.busy) return
-    if (this.context.length) text += '\n\nContext files: ' + this.context.map((p) => '`' + p + '`').join(', ')
-    this.onSubmit?.(text, { mode: this.mode, model: this.model })
+    text += await this.expandContext()
+    this.onSubmit?.(text, { mode: this.mode, model: this.model, env: this.env })
     this.input.value = ''
     this.context = []
     this.renderChips()
@@ -90,6 +217,8 @@ export class Composer {
   }
   focus() { this.input.focus() }
 }
+
+function fmtTok(n) { return n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n) }
 
 export class AgentChatView {
   /**
@@ -173,13 +302,19 @@ export class AgentChatView {
     const a = agentStore.get(this.agentId)
     const busy = a && (a.status === 'running' || a.status === 'awaiting_approval')
     this.composer.setBusy(!!busy)
+    this.composer.setNew(!a, a)
+    this.composer.setUsage(a)
     this.header.replaceChildren()
     if (a) {
       const st = STATUS[a.status] || STATUS.idle
       this.header.append(
         h('span', { class: `status-dot ${st.cls}` }, icon(st.icon, a.status === 'running' ? 'codicon-modifier-spin' : '')),
         h('span', { class: 'chat-title', title: a.title }, a.title),
+        a.env === 'worktree' ? h('span', { class: 'wt-badge', title: 'Isolated git worktree branch' }, icon('git-branch'), a.branch || 'worktree') : null,
         h('span', { class: 'chat-sub' }, a.model),
+        h('div', { class: 'flex1' }),
+        a.usage?.prompt ? h('span', { class: 'chat-usage', title: 'Total tokens used by this agent' }, `${fmtTok(a.usage.prompt)} in · ${fmtTok(a.usage.completion)} out`) : null,
+        a.status !== 'running' && a.contextTokens ? h('button', { class: 'icon-btn', title: 'Compact context now (summarize older turns)', onclick: () => api.post(`/api/agents/${a.id}/compact`).then(() => toast('Context compacted')).catch((e) => toast(e.message, 'error')) }, icon('fold')) : null,
       )
     } else this.header.append(h('span', { class: 'chat-title' }, 'New Agent'))
     // thinking indicator
@@ -233,8 +368,8 @@ export class AgentChatView {
         h('span', {}, `${pending.length} file${pending.length > 1 ? 's' : ''} changed`),
         h('span', { class: 'plus' }, '+' + add), h('span', { class: 'minus' }, '-' + rem),
         h('div', { class: 'flex1' }),
-        h('button', { class: 'btn-ghost', onclick: (e) => { e.stopPropagation(); agentStore.resolve(this.agentId, null, false) } }, 'Undo all'),
-        h('button', { class: 'btn-primary small', onclick: (e) => { e.stopPropagation(); agentStore.resolve(this.agentId, null, true) } }, 'Keep all'),
+        h('button', { class: 'btn-ghost', onclick: (e) => { e.stopPropagation(); agentStore.resolve(this.agentId, null, false).catch((er) => toast(er.message, 'error')) } }, a?.env === 'worktree' ? 'Discard' : 'Undo all'),
+        h('button', { class: 'btn-primary small', title: a?.env === 'worktree' ? 'Apply the worktree changes to your workspace' : 'Keep all changes', onclick: (e) => { e.stopPropagation(); agentStore.resolve(this.agentId, null, true).then(() => a?.env === 'worktree' && toast('Merged into workspace')).catch((er) => toast(er.message, 'error')) } }, a?.env === 'worktree' ? [icon('git-merge'), ' Apply'] : 'Keep all'),
         h('button', { class: 'btn-ghost review-btn', title: 'Review diffs', onclick: (e) => { e.stopPropagation(); this.openDiff?.(this.agentId, pending[0].path) } }, icon('diff'), h('span', { class: 'review-label' }, 'Review')),
       ),
       h('div', { class: 'changes-list' }, rows),
@@ -322,6 +457,30 @@ export class AgentChatView {
       return card
     }
 
+    if (it.name === 'start_background_process') {
+      const ports = it.meta?.ports || []
+      const card = h('div', { class: 'tool-card term-card' + (it.status === 'pending_approval' ? ' needs-approval' : '') },
+        h('div', { class: 'term-head' }, statusIcon || icon('server-process'), h('span', { class: 'term-label' }, it.status === 'pending_approval' ? 'Start background process?' : `${verb} background process`),
+          it.meta?.procId ? h('code', { class: 'muted' }, it.meta.procId) : null, h('div', { class: 'flex1' }),
+          ...ports.map((p) => h('button', { class: 'port-chip', title: 'Open in browser', onclick: () => window.cursorWeb?.openPreview?.(p) }, icon('globe'), 'localhost:' + p))),
+        h('pre', { class: 'term-cmd' }, h('span', { class: 'prompt' }, '$ '), a.command || ''),
+        it.result && it.status !== 'pending_approval' ? h('pre', { class: 'term-out' }, (it.result.split('--- output ---\n')[1] || '').slice(-3000)) : null)
+      if (it.status === 'pending_approval') card.append(h('div', { class: 'approve-bar' },
+        h('button', { class: 'btn-ghost', onclick: () => agentStore.approve(this.agentId, it.id, false) }, 'Skip'),
+        h('button', { class: 'btn-primary small', onclick: () => agentStore.approve(this.agentId, it.id, true) }, 'Start')))
+      return card
+    }
+    if (it.name === 'fetch_url') {
+      const st = it.meta?.status
+      const u = String(a.url || '')
+      const pm = /^(?:https?:\/\/)?(?:localhost|127\.0\.0\.1):(\d+)(\/.*)?/.exec(u)
+      return h('details', { class: 'tool-line-wrap' },
+        h('summary', { class: 'tool-line' }, statusIcon || icon('globe'), h('span', { class: 'verb' }, verb), h('code', {}, u),
+          st !== undefined ? h('span', { class: st >= 200 && st < 400 ? 'exit-ok' : 'exit-bad' }, ' ' + (st || 'failed')) : null,
+          pm ? h('a', { class: 'file-link', onclick: (e) => { e.preventDefault(); window.cursorWeb?.openPreview?.(pm[1], pm[2]) } }, ' open') : null),
+        it.result ? h('pre', { class: 'tool-result' }, it.result.slice(0, 4000)) : null)
+    }
+
     if (it.name === 'run_terminal_command') {
       const out = it.output || (it.result ? it.result.replace(/^\$ .*\n/, '') : '')
       const exit = it.meta?.exitCode
@@ -350,6 +509,7 @@ export class AgentChatView {
       label = [fileLink(a.path || ''), r ? h('span', { class: 'muted' }, ` L${r[0]}-${r[1]}`) : null]
     } else if (it.name === 'list_dir') label = h('code', {}, (a.path && a.path !== '.' ? a.path.replace(/\/$/, '') : '.') + '/')
     else if (it.name === 'grep_search') label = [h('code', {}, a.query), it.meta ? h('span', { class: 'muted' }, ` ${it.meta.count} results`) : null]
+    else if (it.name === 'read_process_output' || it.name === 'stop_process') label = h('code', {}, a.id)
     else if (it.name === 'file_search') label = [h('code', {}, a.pattern), it.meta ? h('span', { class: 'muted' }, ` ${it.meta.count} files`) : null]
     else label = h('code', {}, JSON.stringify(a).slice(0, 80))
     const d = h('details', { class: 'tool-line-wrap' },

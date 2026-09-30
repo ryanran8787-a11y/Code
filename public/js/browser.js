@@ -126,7 +126,7 @@ export class PortsView {
       h('div', { class: 'ports-head' }, h('span', { class: 'muted small' }, 'Background processes started by you or agents'), h('div', { class: 'flex1' }),
         h('button', { class: 'btn-ghost', onclick: async () => { const { inputBox } = await import('./palette.js'); const c = await inputBox({ placeholder: 'npm run dev', prompt: 'Start a background process in the workspace' }); if (c) await api.post('/api/processes', { command: c }) } }, icon('add'), 'Start…')),
       ps.length ? null : h('div', { class: 'empty-note' }, 'No background processes.'),
-      ...ps.map((p) => h('div', { class: 'port-row ' + p.status },
+      ...ps.map((p) => [h('div', { class: 'port-row ' + p.status },
         h('span', { class: 'status-dot ' + (p.status === 'running' ? 'st-done' : 'st-stopped') }, icon(p.status === 'running' ? 'circle-filled' : 'circle-outline')),
         h('code', { class: 'port-cmd', title: p.command }, p.command),
         h('span', { class: 'muted small' }, p.owner === 'user' ? 'you' : 'agent'),
@@ -134,7 +134,7 @@ export class PortsView {
         h('div', { class: 'flex1' }),
         h('button', { class: 'icon-btn', title: 'Show output', onclick: () => { const pre = this.el.querySelector(`[data-out="${p.id}"]`); if (pre) pre.classList.toggle('hidden') } }, icon('output')),
         p.status === 'running' ? h('button', { class: 'icon-btn', title: 'Stop', onclick: () => api.post(`/api/processes/${p.id}/stop`) }, icon('debug-stop')) : h('button', { class: 'icon-btn', title: 'Remove', onclick: () => api.del(`/api/processes/${p.id}`) }, icon('trash'))),
-      h('pre', { class: 'port-out hidden', dataset: { out: p.id } }, p.tail || '(no output)'))),
+      h('pre', { class: 'port-out hidden', dataset: { out: p.id } }, p.tail || '(no output)')]),
     )
   }
 }

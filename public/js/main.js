@@ -81,6 +81,11 @@ function switchWindow(to, agentId) {
   renderTitle()
 }
 app.switchWindow = switchWindow
+app.openPreview = (port, path = '') => {
+  const url = `localhost:${port}${path || ''}`
+  if (document.body.dataset.window === 'agents') app.agents.openBrowser(url)
+  else app.editor.openBrowser(url)
+}
 
 async function quickOpen(initial = '') {
   const recent = JSON.parse(localStorage.getItem('recentFiles') || '[]').filter((p) => files.flat.includes(p))
@@ -124,6 +129,14 @@ function commands() {
     { label: 'View: Toggle Terminal', keybinding: 'Ctrl+`', run: () => { switchWindow('editor'); app.editor.togglePanel() }, icon: icon('terminal') },
     { label: 'View: Toggle Primary Side Bar', keybinding: 'Ctrl+B', run: () => { switchWindow('editor'); app.editor.toggleSidebar() }, icon: icon('layout-sidebar-left') },
     { label: 'View: Show Explorer', run: () => { switchWindow('editor'); app.editor.setView('explorer') }, icon: icon('files') },
+    { label: 'Source Control: Show', keybinding: 'Ctrl+Shift+G', run: () => { switchWindow('editor'); app.editor.setView('scm') }, icon: icon('source-control') },
+    { label: 'Terminal: Create New Terminal', keybinding: 'Ctrl+Shift+`', run: () => { switchWindow('editor'); app.editor.togglePanel(true, 'terminal'); app.editor.terminal.create() }, icon: icon('terminal') },
+    { label: 'View: Show Ports / Background Processes', run: () => { switchWindow('editor'); app.editor.togglePanel(true, 'ports') }, icon: icon('radio-tower') },
+    { label: 'Browser: Open Integrated Browser', run: () => document.body.dataset.window === 'agents' ? app.agents.openBrowser() : app.editor.openBrowser(), icon: icon('globe') },
+    { label: 'Browser: Toggle Design Mode', run: () => { const b = document.body.dataset.window === 'agents' ? (app.agents.openBrowser(), app.agents.browser) : (app.editor.openBrowser(), app.editor.browser); b.toggleDesign() }, icon: icon('inspect') },
+    { label: 'Go to Symbol in Workspace…', keybinding: 'Ctrl+T', run: () => goToSymbol(), icon: icon('symbol-method') },
+    { label: 'Agents: New Agent in Worktree (isolated)', run: () => { localStorage.setItem('composer.env', 'worktree'); newAgent(); toast('New agents will run in isolated git worktrees') }, icon: icon('git-branch') },
+    { label: 'Agents: New Agent Locally', run: () => { localStorage.setItem('composer.env', 'local'); newAgent() }, icon: icon('device-desktop') },
     { label: 'Search: Find in Files', keybinding: 'Ctrl+Shift+F', run: () => { switchWindow('editor'); app.editor.setView('search') }, icon: icon('search') },
     { label: 'Go to File…', keybinding: 'Ctrl+P', run: () => quickOpen(), icon: icon('go-to-file') },
     { label: 'File: New File…', run: () => { switchWindow('editor'); app.editor.setView('explorer'); app.editor.explorer.newFile('') }, icon: icon('new-file') },
@@ -135,6 +148,19 @@ function commands() {
 }
 
 function commandPalette() { return quickOpen('>') }
+
+async function goToSymbol() {
+  const v = await quickPick(() => [], {
+    placeholder: 'Type to search symbols in the workspace',
+    onChangeValue: async (q, { setItems }) => {
+      const syms = await api.get('/api/symbols?q=' + encodeURIComponent(q))
+      setItems(syms.map((s) => ({ label: s.name, description: `${s.kind} · ${s.path}:${s.line}`, value: s, icon: icon(s.kind === 'class' ? 'symbol-class' : 'symbol-method') })))
+    },
+  })
+  if (!v) return
+  switchWindow('editor')
+  app.editor.openFile(v.path, { preview: false, line: v.line })
+}
 
 function newAgent() {
   if (document.body.dataset.window === 'agents') app.agents.newAgent()
@@ -157,6 +183,9 @@ function onKey(e) {
   else if (!e.shiftKey && k === 'p') { e.preventDefault(); e.stopPropagation(); quickOpen() }
   else if (e.shiftKey && k === 'a') { e.preventDefault(); e.stopPropagation(); switchWindow('agents') }
   else if (e.shiftKey && k === 'e') { e.preventDefault(); e.stopPropagation(); switchWindow('editor'); app.editor.setView('explorer') }
+  else if (e.shiftKey && k === 'g') { e.preventDefault(); e.stopPropagation(); switchWindow('editor'); app.editor.setView('scm') }
+  else if (!e.shiftKey && k === 't' && !inMonaco) { e.preventDefault(); goToSymbol() }
+  else if (e.shiftKey && (k === '`' || k === '~')) { e.preventDefault(); switchWindow('editor'); app.editor.togglePanel(true, 'terminal'); app.editor.terminal.create() }
   else if (e.shiftKey && k === 'f') { e.preventDefault(); e.stopPropagation(); switchWindow('editor'); app.editor.setView('search') }
   else if (k === ',') { e.preventDefault(); openSettings() }
   else if (k === '`') { e.preventDefault(); switchWindow('editor'); app.editor.togglePanel() }
@@ -176,8 +205,10 @@ async function openSettings() {
   const def = h('input', { value: s.defaultModel, spellcheck: 'false' })
   const steps = h('input', { value: s.maxSteps, type: 'number', min: 1, max: 200 })
   const auto = h('input', { type: 'checkbox', checked: s.autoRunCommands })
+  const ctxw = h('input', { value: s.contextWindow || 128000, type: 'number', min: 4000 })
+  const wtDef = h('input', { type: 'checkbox', checked: s.defaultEnv === 'worktree' })
   const result = h('div', { class: 'settings-result' })
-  const collect = () => ({ baseUrl: baseUrl.value.trim(), apiKey: apiKey.value, models: models.value.split(',').map((x) => x.trim()).filter(Boolean), defaultModel: def.value.trim(), maxSteps: +steps.value || 40, autoRunCommands: auto.checked })
+  const collect = () => ({ baseUrl: baseUrl.value.trim(), apiKey: apiKey.value, models: models.value.split(',').map((x) => x.trim()).filter(Boolean), defaultModel: def.value.trim(), maxSteps: +steps.value || 40, autoRunCommands: auto.checked, contextWindow: +ctxw.value || 128000, defaultEnv: wtDef.checked ? 'worktree' : 'local' })
   const overlay = h('div', { class: 'modal-overlay', onmousedown: (e) => { if (e.target === overlay) overlay.remove() } },
     h('div', { class: 'modal' },
       h('div', { class: 'modal-head' }, icon('settings-gear'), h('span', {}, 'Settings — AI Model'), h('div', { class: 'flex1' }), h('button', { class: 'icon-btn', onclick: () => overlay.remove() }, icon('close'))),
@@ -187,6 +218,8 @@ async function openSettings() {
         f('Models', models, 'Comma separated list shown in the model picker.'),
         f('Default model', def),
         f('Max agent steps', steps, 'Maximum tool-call iterations per request.'),
+        f('Context window (tokens)', ctxw, 'Used for the context meter; older turns are summarized automatically at 80%.'),
+        h('label', { class: 'field row' }, wtDef, h('span', {}, 'Run new agents in isolated git worktrees by default (parallel-safe)')),
         h('label', { class: 'field row' }, auto, h('span', {}, 'Auto-run terminal commands (YOLO mode) — otherwise every command needs approval')),
         result),
       h('div', { class: 'modal-foot' },

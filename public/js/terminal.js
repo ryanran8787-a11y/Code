@@ -82,14 +82,22 @@ export class TerminalPanel {
     this.el = h('div', { class: 'terminal-panel' }, this.host, this.list)
     bus.on('terminals', () => this.sync())
   }
-  async ensure() {
-    await loadXterm()
-    await this.sync()
-    if (!this.views.size) await this.create()
-    else if (!this.active) this.select([...this.views.keys()][0])
+  ensure() {
+    if (!this._ensuring) this._ensuring = (async () => {
+      await loadXterm()
+      await this.sync()
+      if (!this.views.size) await this.create()
+      else if (!this.active) this.select([...this.views.keys()][0])
+    })().finally(() => { this._ensuring = null })
+    return this._ensuring
   }
   async sync() {
     if (!window.Terminal) return
+    // serialize syncs: the 'terminals' event can race with create()
+    this._sync = (this._sync || Promise.resolve()).then(() => this._doSync()).catch(() => {})
+    return this._sync
+  }
+  async _doSync() {
     const infos = await api.get('/api/terminals')
     for (const i of infos) if (!this.views.has(i.id)) this.views.set(i.id, new TermView(i, this))
     for (const id of [...this.views.keys()]) if (!infos.find((i) => i.id === id)) { this.views.get(id).dispose(); this.views.delete(id); if (this.active === id) this.active = null }
@@ -100,6 +108,7 @@ export class TerminalPanel {
   async create() {
     await loadXterm()
     const i = await api.post('/api/terminals', {})
+    await this.sync()
     if (!this.views.has(i.id)) this.views.set(i.id, new TermView(i, this))
     this.select(i.id)
     return this.views.get(i.id)

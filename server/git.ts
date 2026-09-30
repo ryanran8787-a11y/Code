@@ -173,31 +173,40 @@ export async function worktreeChanges(info: WorktreeInfo) {
 }
 
 /** Commit the agent's work on its branch and apply the patch to the main working tree. */
-export async function applyWorktree(info: WorktreeInfo, files?: string[]) {
+export async function applyWorktree(info: WorktreeInfo, files?: string[], opts: { writeConflicts?: boolean } = {}) {
   const changes = await worktreeChanges(info)
   const pick = changes.filter((c) => !files || files.includes(c.path))
   if (!pick.length) return { applied: [] as string[], conflicts: [] as string[] }
   const patch = await must(['diff', '--cached', '--binary', info.base, '--', ...pick.map((c) => c.path)], info.dir)
+  void patch
   const applied: string[] = []
   const conflicts: string[] = []
-  // try a clean 3-way apply first
-  let r = await git(['apply', '--3way', '--whitespace=nowarn'], WORKSPACE_ROOT, patch)
-  if (r.code !== 0) {
-    // fall back to per-file overwrite when the main tree hasn't diverged for that file
-    for (const c of pick) {
-      const baseContent = await showFile(c.path, info.base, info.dir)
-      let mainContent: string | null = null
-      try { mainContent = fs.readFileSync(path.join(WORKSPACE_ROOT, c.path), 'utf8') } catch { mainContent = null }
-      if (mainContent !== null && baseContent !== null && mainContent !== baseContent) { conflicts.push(c.path); continue }
-      const src = path.join(info.dir, c.path)
-      if (c.status === 'D' || !fs.existsSync(src)) fs.rmSync(path.join(WORKSPACE_ROOT, c.path), { force: true })
-      else { fs.mkdirSync(path.dirname(path.join(WORKSPACE_ROOT, c.path)), { recursive: true }); fs.copyFileSync(src, path.join(WORKSPACE_ROOT, c.path)) }
-      applied.push(c.path)
+  const os = await import('node:os')
+  for (const c of pick) {
+    const dest = path.join(WORKSPACE_ROOT, c.path)
+    const src = path.join(info.dir, c.path)
+    const baseContent = await showFile(c.path, info.base, info.dir)
+    const read = (f: string) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }
+    const mainContent = read(dest)
+    const wtContent = c.status === 'D' ? null : read(src)
+    if (mainContent === wtContent) { applied.push(c.path); continue } // already identical
+    // main unchanged since the agent forked -> take the agent version directly
+    if (mainContent === baseContent) {
+      if (wtContent === null) fs.rmSync(dest, { force: true })
+      else { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(src, dest) }
+      applied.push(c.path); continue
     }
-  } else {
-    applied.push(...pick.map((c) => c.path))
-    // --3way stages the result; leave it unstaged like a normal edit
-    await git(['reset', '-q', '--', ...applied])
+    // both sides changed: real 3-way merge of text files
+    if (mainContent !== null && wtContent !== null) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-merge-'))
+      const [fo, fb, ft] = ['ours', 'base', 'theirs'].map((n) => path.join(tmp, n))
+      fs.writeFileSync(fo, mainContent); fs.writeFileSync(fb, baseContent ?? ''); fs.writeFileSync(ft, wtContent)
+      const r = await git(['merge-file', '-p', '-L', 'workspace', '-L', 'base', '-L', `agent (${info.branch})`, fo, fb, ft], tmp)
+      fs.rmSync(tmp, { recursive: true, force: true })
+      if (r.code === 0) { fs.writeFileSync(dest, r.stdout); applied.push(c.path); continue }
+      if (r.code > 0 && opts.writeConflicts) { fs.writeFileSync(dest, r.stdout); conflicts.push(c.path); continue } // leave <<<<<<< markers
+    }
+    conflicts.push(c.path)
   }
   for (const p of applied) main.emit({ change: 'changed', path: p, source: `agent:${info.agentId}` })
   publish({ kind: 'git' })

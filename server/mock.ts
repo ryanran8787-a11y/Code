@@ -32,7 +32,13 @@ function plan(user: string, fileContents: Record<string, string>): Step[] {
     }
   }
   if (!files.length) steps.push({ name: 'grep_search', args: { query: 'function' } })
-  if (cmd) steps.push({ name: 'run_terminal_command', args: { command: cmd } })
+  const serve = /serve|server|dev server|啟動服務|启动服务|preview|預覽|预览/i.test(user)
+  const port = /(?:port|:)\s*(\d{4,5})/i.exec(user)?.[1] || '5199'
+  if (serve) {
+    const dir = /\bin\s+([\w\-./]+)\//.exec(user)?.[1] || /\b(site|public|web|app)\b/.exec(user)?.[1] || ''
+    steps.push({ name: 'start_background_process', args: { command: `python3 -m http.server ${port} --bind 127.0.0.1`, cwd: dir, wait_seconds: 2 } })
+    steps.push({ name: 'fetch_url', args: { url: `http://localhost:${port}/` } })
+  } else if (cmd) steps.push({ name: 'run_terminal_command', args: { command: cmd } })
   return steps
 }
 
