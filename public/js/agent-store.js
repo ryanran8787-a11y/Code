@@ -83,7 +83,14 @@ class AgentStore extends Emitter {
   markRead(id) { const a = this.get(id); if (a?.unread) api.post(`/api/agents/${id}/read`) }
   approve(id, toolId, approve) { return api.post(`/api/agents/${id}/approve`, { toolId, approve }) }
   changes(id) { return api.get(`/api/agents/${id}/changes`) }
-  resolve(id, path, accept) { return api.post(`/api/agents/${id}/changes/resolve`, { path, accept }) }
+  async resolve(id, path, accept) {
+    try { return await api.post(`/api/agents/${id}/changes/resolve`, { path, accept }) } catch (e) {
+      if (e.status === 409 && confirm(`${e.message}\n\nMerge anyway and leave <<<<<<< conflict markers to resolve in the editor?`)) {
+        return api.post(`/api/agents/${id}/changes/resolve`, { path, accept, force: true }).catch((e2) => { throw e2 })
+      }
+      throw e
+    }
+  }
 }
 
 export const agentStore = new AgentStore()

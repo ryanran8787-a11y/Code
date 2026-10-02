@@ -61,6 +61,7 @@ await p.fill('.scm-msg', 'Add notes')
 await p.click('.scm-commit-btn')
 await p.waitForFunction(() => [...document.querySelectorAll('.scm-commit-row')].some((r) => r.textContent.includes('Add notes')), null, { timeout: 8000 })
 ok(execSync(`git -C ${WS} log -1 --pretty=%s`).toString().trim() === 'Add notes', 'commit created in git')
+execSync(`git -C ${WS} rm -q ${NOTE} && git -C ${WS} -c user.name=t -c user.email=t@t commit -qm 'test cleanup'`)
 await shot(p, 'scm')
 execSync(`git -C ${WS} checkout -q src/todo.js`)
 

@@ -80,7 +80,7 @@ export class BrowserView {
     this.designBtn.classList.toggle('on', this.design)
     this.sendInspect(this.design)
     if (!this.design) this.picked.classList.add('hidden')
-    else toast('Design Mode: click an element on the page to annotate it.')
+    else toast('Design Mode: click an element on the page to annotate it.', 'info', 2000)
   }
   sendInspect(on) { try { this.frame.contentWindow?.postMessage({ cursorweb: 'inspect', on }, '*') } catch { /* */ } }
 

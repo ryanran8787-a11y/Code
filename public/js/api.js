@@ -6,7 +6,7 @@ async function req(method, url, body) {
     body: body !== undefined ? JSON.stringify(body) : undefined,
   })
   const j = await r.json().catch(() => ({}))
-  if (!r.ok) throw new Error(j.error || r.statusText)
+  if (!r.ok) throw Object.assign(new Error(j.error || r.statusText), { status: r.status, data: j })
   return j
 }
 export const api = {

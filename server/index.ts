@@ -158,8 +158,13 @@ app.post('/api/agents/:id/approve', async (c) => {
 })
 app.get('/api/agents/:id/changes', async (c) => c.json(await agents.changeDetails(c.req.param('id'))))
 app.post('/api/agents/:id/changes/resolve', async (c) => {
-  const { path: p, accept } = await c.req.json()
-  return c.json(await agents.resolveChange(c.req.param('id'), p ?? null, !!accept))
+  const { path: p, accept, force } = await c.req.json()
+  try {
+    return c.json(await agents.resolveChange(c.req.param('id'), p ?? null, !!accept, !!force))
+  } catch (e: any) {
+    if (e.conflicts) return c.json({ error: e.message, conflicts: e.conflicts }, 409)
+    throw e
+  }
 })
 
 // ---------- live events ----------

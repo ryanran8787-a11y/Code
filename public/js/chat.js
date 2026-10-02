@@ -23,7 +23,7 @@ const TOOL_META = {
 }
 
 export class Composer {
-  constructor({ placeholder = 'Plan, search, build anything…  (@ to mention files, folders, symbols)', onSubmit, onStop, compact = false, autofocus = false }) {
+  constructor({ placeholder = 'Plan, search, build anything… (@ for context)', onSubmit, onStop, compact = false, autofocus = false }) {
     this.onSubmit = onSubmit
     this.onStop = onStop
     this.mode = localStorage.getItem('composer.mode') || 'agent'

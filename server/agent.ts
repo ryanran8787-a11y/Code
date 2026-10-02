@@ -214,12 +214,12 @@ export function approveTool(agentId: string, toolId: string, ok: boolean) {
 }
 
 // ---- change review (Keep / Undo) --------------------------------------------
-export async function resolveChange(agentId: string, filePath: string | null, accept: boolean) {
+export async function resolveChange(agentId: string, filePath: string | null, accept: boolean, force = false) {
   const a = agents.get(agentId); if (!a) throw new Error('Agent not found')
   if (a.env === 'worktree' && a.worktree) {
     const files = filePath === null ? undefined : [filePath]
     let result: any = {}
-    if (accept) result = await git.applyWorktree(a.worktree, files)
+    if (accept) result = await git.applyWorktree(a.worktree, files, { writeConflicts: force })
     else await git.revertWorktree(a.worktree, files)
     // record decisions so the UI can show accepted / rejected state
     for (const c of (await git.worktreeChanges(a.worktree)).filter((c) => !files || files.includes(c.path))) {
@@ -229,7 +229,7 @@ export async function resolveChange(agentId: string, filePath: string | null, ac
     await refreshWtPending(a)
     touch(a)
     publish({ kind: 'agent.changes', agentId: a.id })
-    if (result.conflicts?.length) throw new Error(`Could not apply (main workspace changed): ${result.conflicts.join(', ')}`)
+    if (result.conflicts?.length) throw Object.assign(new Error(force ? `Merged with conflict markers in: ${result.conflicts.join(', ')} — resolve them in the editor` : `Conflicts with your workspace edits in: ${result.conflicts.join(', ')}`), { conflicts: result.conflicts })
     return a.changes
   }
   const targets = Object.values(a.changes).filter((c) => c.status === 'pending' && (filePath === null || c.path === filePath))

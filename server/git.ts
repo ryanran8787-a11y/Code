@@ -177,8 +177,6 @@ export async function applyWorktree(info: WorktreeInfo, files?: string[], opts: 
   const changes = await worktreeChanges(info)
   const pick = changes.filter((c) => !files || files.includes(c.path))
   if (!pick.length) return { applied: [] as string[], conflicts: [] as string[] }
-  const patch = await must(['diff', '--cached', '--binary', info.base, '--', ...pick.map((c) => c.path)], info.dir)
-  void patch
   const applied: string[] = []
   const conflicts: string[] = []
   const os = await import('node:os')
