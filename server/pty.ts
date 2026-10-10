@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from 'ws'
 import type { IncomingMessage, Server } from 'node:http'
 import { WORKSPACE_ROOT } from './workspace'
 import { publish } from './events'
+import { interactiveShell, shellTitle } from './shell'
 
 type Session = { id: string; title: string; cwd: string; pty: nodePty.IPty; buffer: string; clients: Set<WebSocket>; exited: boolean; createdAt: number }
 const sessions = new Map<string, Session>()
@@ -17,12 +18,12 @@ export function listTerminals() {
 
 export function createTerminal(cwd = WORKSPACE_ROOT, cols = 100, rows = 24) {
   const id = 't' + ++counter + Math.random().toString(36).slice(2, 5)
-  const shell = process.env.SHELL && !process.env.SHELL.endsWith('nologin') ? process.env.SHELL : 'bash'
-  const pty = nodePty.spawn(shell, ['-l'], {
+  const { shell, args } = interactiveShell()
+  const pty = nodePty.spawn(shell, args, {
     name: 'xterm-256color', cols, rows, cwd,
     env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'CursorWeb' } as any,
   })
-  const s: Session = { id, title: `${shell.split('/').pop()} ${counter}`, cwd, pty, buffer: '', clients: new Set(), exited: false, createdAt: Date.now() }
+  const s: Session = { id, title: `${shellTitle(shell)} ${counter}`, cwd, pty, buffer: '', clients: new Set(), exited: false, createdAt: Date.now() }
   pty.onData((d) => {
     s.buffer = (s.buffer + d).slice(-SCROLLBACK)
     for (const c of s.clients) if (c.readyState === WebSocket.OPEN) c.send(JSON.stringify({ t: 'o', d }))

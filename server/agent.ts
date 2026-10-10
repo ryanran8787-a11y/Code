@@ -10,6 +10,7 @@ import { TOOL_SCHEMAS, executeTool } from './tools'
 import * as ws from './workspace'
 import * as git from './git'
 import * as procs from './processes'
+import { shellLabel, isWindows } from './shell'
 
 export type AgentStatus = 'idle' | 'running' | 'awaiting_approval' | 'done' | 'error' | 'stopped'
 
@@ -127,8 +128,9 @@ async function systemPrompt(a: Agent) {
   const tree = (await w.listFilesFlat(300)).join('\n')
   const bg = procs.list().filter((p) => p.status === 'running')
   return `You are an autonomous AI coding agent working inside a web IDE (a Cursor-like tool built on VS Code technology).
-You operate on the user's workspace through tools. Workspace root: "${path.basename(ws.WORKSPACE_ROOT)}" (all paths are relative to it).${a.env === 'worktree' ? `
-You are running in an ISOLATED GIT WORKTREE on branch "${a.worktree?.branch}". Other agents may work in parallel in their own worktrees; your changes are reviewed and merged by the user.` : ''}
+You operate on the user's workspace through tools. Workspace root: "${path.basename(ws.WORKSPACE_ROOT)}" (all paths are relative to it). Host OS: ${process.platform}; shell: ${shellLabel()}.${a.env === 'worktree' ? `
+You are running in an ISOLATED GIT WORKTREE on branch "${a.worktree?.branch}". Other agents may work in parallel in their own worktrees; your changes are reviewed and merged by the user.` : ''}${isWindows ? `
+Windows shell notes: chain commands with \`;\` (not \`&&\`); prefer \`node --version; npm test\` style; avoid bash-only syntax (\`ls -la\`, \`cat\`, \`grep\`) — use PowerShell equivalents (\`Get-ChildItem\`, \`Get-Content\`).` : ''}
 
 ${mode === 'ask' ? 'ASK MODE: you may only read and search files. Do not modify files or run commands; answer the question.' : `Guidelines:
 - Work autonomously until the task is fully done. Explore with list_dir / file_search / grep_search, read_file before editing.

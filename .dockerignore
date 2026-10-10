@@ -1,0 +1,9 @@
+node_modules
+npm-debug.log
+workspace
+.cursorweb
+.cursorweb-worktrees
+.git
+.gitignore
+Dockerfile
+docker-compose.yml

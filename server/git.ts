@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { WORKSPACE_ROOT, Workspace, main } from './workspace'
 import { publish } from './events'
+import { symlinkType } from './shell'
 
 export function git(args: string[], cwd = WORKSPACE_ROOT, input?: string): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -151,7 +152,7 @@ export async function createWorktree(agentId: string, slug: string): Promise<Wor
   const start = (await must(['rev-parse', 'HEAD'], dir)).trim()
   // symlink node_modules so builds/tests work without reinstalling
   const nm = path.join(WORKSPACE_ROOT, 'node_modules')
-  if (fs.existsSync(nm) && !fs.existsSync(path.join(dir, 'node_modules'))) try { fs.symlinkSync(nm, path.join(dir, 'node_modules'), 'dir') } catch { /* ignore */ }
+  if (fs.existsSync(nm) && !fs.existsSync(path.join(dir, 'node_modules'))) try { fs.symlinkSync(nm, path.join(dir, 'node_modules'), symlinkType()) } catch { /* ignore */ }
   publish({ kind: 'git' })
   return { agentId, dir, branch, base: start }
 }

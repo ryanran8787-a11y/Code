@@ -168,6 +168,7 @@ export class SearchView {
     const by = new Map()
     for (const hit of hits) { if (!by.has(hit.path)) by.set(hit.path, []); by.get(hit.path).push(hit) }
     this.summary.textContent = hits.length ? `${hits.length} results in ${by.size} files` : 'No results found.'
+    this.maybeRgHint()
     const re = this.regexBtn.classList.contains('on') ? safeRe(q, this.caseBtn.classList.contains('on')) : new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), this.caseBtn.classList.contains('on') ? 'g' : 'gi')
     this.results.replaceChildren(...[...by].map(([p, hs]) => {
       const group = h('div', { class: 'sr-group' },
@@ -175,6 +176,14 @@ export class SearchView {
         ...hs.map((x) => h('div', { class: 'sr-line', onclick: () => this.openFile(p, { line: x.line, preview: true }), html: highlight(x.text.trim(), re) })))
       return group
     }))
+  }
+  async maybeRgHint() {
+    if (this._rgChecked) return
+    this._rgChecked = true
+    try {
+      const r = await api.get('/api/search-backend')
+      if (r.backend !== 'rg') this.summary.textContent += ' — ripgrep not found, search is slow (Windows: winget install BurntSushi.ripgrep.MSVC)'
+    } catch { /* ignore */ }
   }
 }
 function safeRe(q, cs) { try { return new RegExp(q, cs ? 'g' : 'gi') } catch { return /$^/ } }

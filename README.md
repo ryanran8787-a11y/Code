@@ -53,6 +53,20 @@ node tests/e2e-v2.mjs          # v2 E2E: terminals / SCM / worktrees / browser /
 ```
 Model settings: open ⚙ Settings in the UI and enter Base URL / API Key / model list. Any OpenAI-compatible endpoint works (OpenAI, DeepSeek, Ollama, vLLM, OpenRouter…). You can also use the `OPENAI_BASE_URL` / `OPENAI_API_KEY` / `MODELS` / `DEFAULT_MODEL` environment variables. The API key is stored only on the server.
 
+## Windows
+
+Native Windows is supported: shell commands run in PowerShell (chain with `;`, not `&&`), interactive terminals use `COMSPEC` (usually cmd.exe), listening ports are found via `netstat`, and worktree `node_modules` links use junctions (no admin needed). Prerequisites: Node 22, Git, and optionally ripgrep (`winget install BurntSushi.ripgrep.MSVC`) — without it, search falls back to a slower JS scan and the search panel tells you so.
+
+## Docker (Linux-identical runtime)
+
+```bash
+docker build -t cursorweb .
+docker run -p 3000:3000 -v ./workspace:/workspace cursorweb
+# or: docker compose up --build
+```
+
+The image is `node:22-slim` + git + ripgrep. The workspace persists in `./workspace` (seeded from `examples/todo-app` on first run). Pass `-e ACCESS_TOKEN=secret` to require `?token=secret`.
+
 ## Architecture
 ```
 server/ (Node + Hono)
