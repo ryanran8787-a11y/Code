@@ -57,6 +57,7 @@ app.get('/api/search', async (c) => {
   const q = c.req.query('q') || ''
   return c.json(await ws.searchText(q, { regex: c.req.query('regex') === '1', caseSensitive: c.req.query('case') === '1', include: c.req.query('include') || undefined }))
 })
+app.get('/api/search-backend', (c) => c.json({ backend: ws.searchBackend() }))
 
 // ---------- terminal (non-interactive, streamed) ----------
 app.post('/api/terminal/run', async (c) => {

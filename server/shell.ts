@@ -3,14 +3,31 @@
 // workspace.runCommand, background processes and PTY stay in sync.
 import { spawnSync } from 'node:child_process'
 import type { ChildProcess } from 'node:child_process'
+import fs from 'node:fs'
 
 export const isWindows = process.platform === 'win32'
+
+/** Absolute inbox paths so a stripped PATH can't break us. Falls back to bare name. */
+function sysBin(exe: string, sub = ''): string {
+  if (!isWindows) return exe
+  const root = process.env.SystemRoot || 'C:\\Windows'
+  const abs = sub ? `${root}\\System32\\${sub}\\${exe}` : `${root}\\System32\\${exe}`
+  try { if (fs.existsSync(abs)) return abs } catch { /* fall through */ }
+  return exe
+}
+
+export function powershellExe(): string {
+  // inbox Windows PowerShell 5.1; falls back to PATH (PowerShell 7 pwsh users keep working via -Command compat)
+  return sysBin('powershell.exe', 'WindowsPowerShell\\v1.0')
+}
+export function netstatExe(): string { return sysBin('netstat.exe') }
+export function taskkillExe(): string { return sysBin('taskkill.exe') }
 
 /** Non-interactive command: returns argv to spawn. */
 export function shellForCommand(command: string): { cmd: string; args: string[] } {
   if (isWindows) {
     // -NonInteractive avoids prompts hanging the agent loop.
-    return { cmd: 'powershell.exe', args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] }
+    return { cmd: powershellExe(), args: ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command] }
   }
   return { cmd: 'bash', args: ['-lc', command] }
 }
@@ -36,7 +53,7 @@ export function killTree(pid: number | undefined, child?: ChildProcess, sig: Nod
   if (!pid && !child) return
   if (isWindows) {
     if (pid) {
-      const r = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+      const r = spawnSync(taskkillExe(), ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true })
       if (r.status === 0) return
     }
     try { child?.kill('SIGTERM') } catch { /* gone */ }

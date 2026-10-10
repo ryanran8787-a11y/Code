@@ -1,9 +1,9 @@
 // Long-running background processes (dev servers, watchers…) started by agents
 // or the user. Output is kept in a ring buffer; detected localhost ports are
 // surfaced so the integrated browser can open them.
-import { spawn, ChildProcess } from 'node:child_process'
+import { spawn, ChildProcess, execFileSync } from 'node:child_process'
 import { publish } from './events'
-import { shellForCommand, killTree, isWindows } from './shell'
+import { shellForCommand, killTree, isWindows, powershellExe, netstatExe } from './shell'
 
 export type Proc = {
   id: string
@@ -52,7 +52,8 @@ export function start(command: string, cwd: string, owner = 'user') {
   }
   child.stdout?.on('data', onData)
   child.stderr?.on('data', onData)
-  // also discover ports by scanning the process tree's listening sockets (/proc/net/tcp)
+  // also discover ports by scanning the process tree's listening sockets
+  // (Linux: /proc/net/tcp, Windows: netstat -ano; other platforms: log regex only)
   const scan = setInterval(() => { if (p.status !== 'running') return clearInterval(scan); for (const port of listeningPorts(p.pid!)) if (!p.ports.includes(port)) { p.ports.push(port); publish({ kind: 'proc', proc: summary(p) }) } }, 1500)
   child.on('exit', (code) => { p.status = 'exited'; p.exitCode = code; p.child = undefined; publish({ kind: 'proc', proc: summary(p) }) })
   child.on('error', (e) => { p.output += String(e); p.status = 'exited'; publish({ kind: 'proc', proc: summary(p) }) })
@@ -101,7 +102,9 @@ function descendants(pid: number): number[] {
   return out
 }
 function listeningPorts(pid: number): number[] {
-  if (!pid || process.platform !== 'linux') return []
+  if (!pid) return []
+  if (process.platform === 'win32') return listeningPortsWindows(pid)
+  if (process.platform !== 'linux') return []
   const inodes = new Set<string>()
   for (const p of descendants(pid)) {
     try { for (const fd of fs.readdirSync(`/proc/${p}/fd`)) { try { const l = fs.readlinkSync(`/proc/${p}/fd/${fd}`); const m = /^socket:\[(\d+)\]$/.exec(l); if (m) inodes.add(m[1]) } catch { /* */ } } } catch { /* */ }
@@ -115,5 +118,56 @@ function listeningPorts(pid: number): number[] {
       }
     } catch { /* */ }
   }
+  return ports
+}
+
+// ---- Windows: netstat -ano + Win32_Process tree ---------------------------
+// netstat localizes the state column (LISTENING) on non-English systems, so a
+// listening TCP socket is identified locale-independently by its foreign
+// address being 0.0.0.0:0 / [::]:0 (only listeners have a zero foreign port).
+function descendantsWindows(pid: number): number[] {
+  const out = [pid]
+  try {
+    const raw = execFileSync(powershellExe(),
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command',
+        'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress'],
+      { timeout: 8000, windowsHide: true }).toString()
+    const parsed = JSON.parse(raw)
+    const arr = Array.isArray(parsed) ? parsed : [parsed]
+    const kids = new Map<number, number[]>()
+    for (const p of arr) {
+      const c = +p.ProcessId, par = +p.ParentProcessId
+      if (!kids.has(par)) kids.set(par, [])
+      kids.get(par)!.push(c)
+    }
+    const queue = [pid]
+    while (queue.length) {
+      const cur = queue.pop()!
+      for (const k of kids.get(cur) || []) if (!out.includes(k)) { out.push(k); queue.push(k) }
+    }
+  } catch { /* fall back to just pid */ }
+  return out
+}
+
+function listeningPortsWindows(pid: number): number[] {
+  const tree = new Set(descendantsWindows(pid))
+  const ports: number[] = []
+  const appPort = +(process.env.PORT || 3000)
+  try {
+    const raw = execFileSync(netstatExe(), ['-ano', '-p', 'TCP'], { timeout: 8000, windowsHide: true }).toString()
+    for (const line of raw.split('\n')) {
+      const c = line.trim().split(/\s+/)
+      // columns: PROTO LOCAL FOREIGN STATE PID (STATE text varies by locale)
+      if (c.length < 5 || c[0] !== 'TCP') continue
+      const owner = +c[c.length - 1]
+      if (!Number.isInteger(owner) || !tree.has(owner)) continue
+      const foreign = c[c.length - 3]
+      if (!/:(0|\*)$/.test(foreign)) continue // only listeners have a zero foreign port
+      const local = c[1]
+      const port = parseInt(local.slice(local.lastIndexOf(':') + 1), 10)
+      if (!port || port === appPort || ports.includes(port)) continue
+      ports.push(port)
+    }
+  } catch { /* netstat unavailable */ }
   return ports
 }

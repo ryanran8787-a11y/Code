@@ -21,6 +21,18 @@ export type TreeNode = { name: string; path: string; type: 'file' | 'dir'; child
 export type SearchHit = { path: string; line: number; text: string }
 export type ExecResult = { exitCode: number | null; output: string; timedOut: boolean }
 
+/** Which backend the last content search used. Set lazily on first search. */
+let searchBackendState: 'unknown' | 'rg' | 'js-fallback' = 'unknown'
+export function searchBackend(): 'rg' | 'js-fallback' {
+  return searchBackendState === 'js-fallback' ? 'js-fallback' : 'rg'
+}
+function noteRgMissing() {
+  searchBackendState = 'js-fallback'
+  if ((noteRgMissing as any)._warned) return
+  ;(noteRgMissing as any)._warned = true
+  console.warn('[search] ripgrep (rg) not found — falling back to a slow JS directory scan. Install for fast search: Windows `winget install BurntSushi.ripgrep.MSVC`, macOS `brew install ripgrep`, Debian/Ubuntu `sudo apt install ripgrep`.')
+}
+
 /**
  * A file-system root the IDE / an agent operates on. The main workspace is one
  * instance; every agent running in an isolated git worktree gets its own.
@@ -142,7 +154,8 @@ export class Workspace {
       child.on('error', () => resolve(null))
       child.on('close', () => resolve(out))
     })
-    if (hits) return hits
+    if (hits) { searchBackendState = 'rg'; return hits }
+    noteRgMissing()
     const files = await this.listFilesFlat()
     const res: SearchHit[] = []
     const re = opts.regex ? new RegExp(query, opts.caseSensitive ? '' : 'i') : null
