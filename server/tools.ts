@@ -88,7 +88,7 @@ export const TOOL_SCHEMAS = [
     function: {
       name: 'run_terminal_command',
       description:
-        'Run a non-interactive shell command (bash) in the workspace, e.g. to run tests, build, list files, install deps. Avoid long-running servers. Output is truncated.',
+        'Run a non-interactive shell command in the workspace, e.g. to run tests, build, list files, install deps. Avoid long-running servers. Output is truncated. Shell is bash on Linux/macOS and PowerShell on Windows (use `;` to chain commands; `&&` is not supported in Windows PowerShell 5.1).',
       parameters: {
         type: 'object',
         properties: {
@@ -125,7 +125,7 @@ export const TOOL_SCHEMAS = [
     type: 'function',
     function: {
       name: 'start_background_process',
-      description: 'Start a long-running process (dev server, watcher) in the background. Returns an id; use read_process_output to check logs and detected ports, stop_process to stop it. Prefer this over run_terminal_command for servers.',
+      description: 'Start a long-running process (dev server, watcher) in the background. Returns an id; use read_process_output to check logs and detected ports, stop_process to stop it. Prefer this over run_terminal_command for servers. Shell is bash on Linux/macOS and PowerShell on Windows.',
       parameters: { type: 'object', properties: { command: { type: 'string' }, cwd: { type: 'string' }, wait_seconds: { type: 'integer', description: 'Seconds to wait before returning initial output (default 3)' } }, required: ['command'] },
     },
   },

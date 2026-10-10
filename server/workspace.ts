@@ -3,6 +3,7 @@ import fss from 'node:fs'
 import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { publish } from './events'
+import { shellForCommand } from './shell'
 
 export const WORKSPACE_ROOT = path.resolve(process.env.WORKSPACE || path.join(process.cwd(), 'workspace'))
 // First run without an explicit WORKSPACE: seed ./workspace from the bundled example project.
@@ -162,7 +163,8 @@ export class Workspace {
   runCommand(command: string, opts: { cwd?: string; timeoutMs?: number; onData?: (chunk: string) => void; signal?: AbortSignal } = {}): Promise<ExecResult> {
     return new Promise((resolve) => {
       const cwd = this.resolve(opts.cwd || '')
-      const child = spawn('bash', ['-lc', command], { cwd, env: { ...process.env, FORCE_COLOR: '0', CI: '1' } })
+      const { cmd, args } = shellForCommand(command)
+      const child = spawn(cmd, args, { cwd, env: { ...process.env, FORCE_COLOR: '0', CI: '1' } })
       let output = ''
       let timedOut = false
       const LIMIT = 200_000

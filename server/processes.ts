@@ -3,6 +3,7 @@
 // surfaced so the integrated browser can open them.
 import { spawn, ChildProcess } from 'node:child_process'
 import { publish } from './events'
+import { shellForCommand, killTree, isWindows } from './shell'
 
 export type Proc = {
   id: string
@@ -33,7 +34,11 @@ export function get(id: string) { return procs.get(id) }
 
 export function start(command: string, cwd: string, owner = 'user') {
   const p: Proc = { id: uid(), command, cwd, owner, status: 'running', exitCode: null, startedAt: Date.now(), ports: [], output: '' }
-  const child = spawn('bash', ['-lc', command], { cwd, env: { ...process.env, FORCE_COLOR: '0', BROWSER: 'none', CI: '1' }, detached: true })
+  const { cmd, args } = shellForCommand(command)
+  // NOTE: detached:true breaks stdout pipes on Windows (child gets its own
+  // console and output is lost), so only detach on POSIX where group-kill
+  // needs it. Windows tree-kill is handled by taskkill /T in killTree.
+  const child = spawn(cmd, args, { cwd, env: { ...process.env, FORCE_COLOR: '0', BROWSER: 'none', CI: '1' }, detached: !isWindows, windowsHide: true })
   p.child = child
   p.pid = child.pid
   const onData = (d: Buffer) => {
@@ -60,8 +65,8 @@ export function stop(id: string) {
   const p = procs.get(id)
   if (!p) throw new Error('No such process: ' + id)
   if (p.child && p.pid) {
-    try { process.kill(-p.pid, 'SIGTERM') } catch { p.child.kill('SIGTERM') }
-    setTimeout(() => { if (p.status === 'running' && p.pid) try { process.kill(-p.pid, 'SIGKILL') } catch { /* gone */ } }, 3000)
+    killTree(p.pid, p.child, 'SIGTERM')
+    setTimeout(() => { if (p.status === 'running') killTree(p.pid, p.child, 'SIGKILL' as any) }, 3000)
   }
   return summary(p)
 }
@@ -82,7 +87,7 @@ export function waitFor(id: string, ms: number) {
   })
 }
 
-process.on('exit', () => { for (const p of procs.values()) if (p.pid && p.status === 'running') try { process.kill(-p.pid, 'SIGKILL') } catch { /* ignore */ } })
+  process.on('exit', () => { for (const p of procs.values()) if (p.pid && p.status === 'running') killTree(p.pid, p.child, 'SIGKILL' as any) })
 
 import fs from 'node:fs'
 function descendants(pid: number): number[] {
