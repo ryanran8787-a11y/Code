@@ -211,8 +211,12 @@ async function openSettings() {
   const auto = h('input', { type: 'checkbox', checked: s.autoRunCommands })
   const ctxw = h('input', { value: s.contextWindow || 128000, type: 'number', min: 4000 })
   const wtDef = h('input', { type: 'checkbox', checked: s.defaultEnv === 'worktree' })
+  const allow = h('textarea', { rows: 2, spellcheck: 'false' }, (s.commandAllowlist || []).join('\n'))
+  const deny = h('textarea', { rows: 2, spellcheck: 'false' }, (s.commandDenylist || []).join('\n'))
+  const fallbacks = h('input', { value: (s.fallbackModels || []).join(', '), spellcheck: 'false' })
+  const retries = h('input', { value: s.retryBudget ?? 2, type: 'number', min: 0, max: 10 })
   const result = h('div', { class: 'settings-result' })
-  const collect = () => ({ baseUrl: baseUrl.value.trim(), apiKey: apiKey.value, models: models.value.split(',').map((x) => x.trim()).filter(Boolean), defaultModel: def.value.trim(), maxSteps: +steps.value || 40, autoRunCommands: auto.checked, contextWindow: +ctxw.value || 128000, defaultEnv: wtDef.checked ? 'worktree' : 'local' })
+  const collect = () => ({ baseUrl: baseUrl.value.trim(), apiKey: apiKey.value, models: models.value.split(',').map((x) => x.trim()).filter(Boolean), defaultModel: def.value.trim(), maxSteps: +steps.value || 40, autoRunCommands: auto.checked, contextWindow: +ctxw.value || 128000, defaultEnv: wtDef.checked ? 'worktree' : 'local', commandAllowlist: allow.value.split('\n').map((x) => x.trim()).filter(Boolean), commandDenylist: deny.value.split('\n').map((x) => x.trim()).filter(Boolean), fallbackModels: fallbacks.value.split(',').map((x) => x.trim()).filter(Boolean), retryBudget: Math.max(0, +retries.value || 0) })
   const overlay = h('div', { class: 'modal-overlay', onmousedown: (e) => { if (e.target === overlay) overlay.remove() } },
     h('div', { class: 'modal' },
       h('div', { class: 'modal-head' }, icon('settings-gear'), h('span', {}, 'Settings — AI Model'), h('div', { class: 'flex1' }), h('button', { class: 'icon-btn', onclick: () => overlay.remove() }, icon('close'))),
@@ -223,6 +227,10 @@ async function openSettings() {
         f('Default model', def),
         f('Max agent steps', steps, 'Maximum tool-call iterations per request.'),
         f('Context window (tokens)', ctxw, 'Used for the context meter; older turns are summarized automatically at 80%.'),
+        f('Auto-approve commands', allow, 'One regex per line. Matching terminal commands run without asking (deny list still wins).'),
+        f('Blocked commands', deny, 'One regex per line. Matching commands are rejected outright.'),
+        f('Fallback models', fallbacks, 'Comma separated. Tried in order when the primary model fails with a retryable error (429/5xx/timeout).'),
+        f('Retries per model', retries, 'Retries on retryable errors with exponential backoff before falling over to the next model.'),
         h('label', { class: 'field row' }, wtDef, h('span', {}, 'Run new agents in isolated git worktrees by default (parallel-safe)')),
         h('label', { class: 'field row' }, auto, h('span', {}, 'Auto-run terminal commands (YOLO mode) — otherwise every command needs approval')),
         result),

@@ -19,6 +19,14 @@ export type Settings = {
   /** compact when the prompt exceeds this fraction of contextWindow */
   compactAt: number
   defaultEnv: 'local' | 'worktree'
+  /** terminal/background commands matching any of these regexes run without asking */
+  commandAllowlist: string[]
+  /** matching commands are rejected outright (deny wins over allow) */
+  commandDenylist: string[]
+  /** tried in order when the primary model fails with a retryable error */
+  fallbackModels: string[]
+  /** retries per model on retryable errors (429/5xx/timeout), exponential backoff */
+  retryBudget: number
 }
 
 function fromGensparkYaml(): { apiKey?: string; baseUrl?: string } {
@@ -42,6 +50,11 @@ const defaults: Settings = {
   contextWindow: Number(process.env.CONTEXT_WINDOW || 128000),
   compactAt: 0.8,
   defaultEnv: 'local',
+  // one pattern per line; each entry is a full regex (alternation with | is fine inside an entry)
+  commandAllowlist: (process.env.COMMAND_ALLOWLIST || '^(npm test|npm run test|ls|pwd|git status|git diff|node --version)(\\s|$)').split('\n').map((s) => s.trim()).filter(Boolean),
+  commandDenylist: (process.env.COMMAND_DENYLIST || 'rm\\s+-rf\\s+/(\\s|$)\n:\\(\\)\\s*\\{').split('\n').map((s) => s.trim()).filter(Boolean),
+  fallbackModels: (process.env.FALLBACK_MODELS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  retryBudget: Number(process.env.RETRY_BUDGET || 2),
 }
 
 let current: Settings = { ...defaults }
@@ -61,7 +74,10 @@ export function updateSettings(patch: Partial<Settings>) {
     if (k === 'apiKey' && (typeof v !== 'string' || v.includes('…'))) continue // masked value sent back
     ;(next as any)[k] = v
   }
-  if (typeof next.models === 'string') next.models = (next.models as any).split(',').map((s: string) => s.trim()).filter(Boolean)
+  for (const k of ['models', 'commandAllowlist', 'commandDenylist', 'fallbackModels'] as const) {
+    const v = (next as any)[k]
+    if (typeof v === 'string') (next as any)[k] = v.split(k === 'models' || k === 'fallbackModels' ? ',' : '\n').map((s: string) => s.trim()).filter(Boolean)
+  }
   current = next
   fs.writeFileSync(FILE, JSON.stringify(current, null, 2))
   return publicSettings()
