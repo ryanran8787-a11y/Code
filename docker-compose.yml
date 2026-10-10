@@ -1,0 +1,12 @@
+services:
+  cursorweb:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./workspace:/workspace
+    environment:
+      - PORT=3000
+      # Uncomment to require ?token=secret for access:
+      # - ACCESS_TOKEN=secret
+    restart: unless-stopped
