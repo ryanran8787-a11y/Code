@@ -42,7 +42,7 @@ function plan(user: string, fileContents: Record<string, string>): Step[] {
   return steps
 }
 
-function commentFor(path: string) {
+export function commentFor(path: string) {
   if (/\.(py|sh|rb)$/.test(path)) return '# Edited by the mock agent'
   if (/\.(md|html)$/.test(path)) return '<!-- Edited by the mock agent -->'
   if (/\.css$/.test(path)) return '/* Edited by the mock agent */'

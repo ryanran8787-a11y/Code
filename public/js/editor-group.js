@@ -37,6 +37,7 @@ export class EditorGroup extends Emitter {
       renderLineHighlight: 'all', smoothScrolling: true, cursorBlinking: 'smooth', cursorSmoothCaretAnimation: 'on',
       bracketPairColorization: { enabled: true }, guides: { bracketPairs: 'active', indentation: true },
       stickyScroll: { enabled: true }, padding: { top: 4 }, model: null, tabSize: 2,
+      inlineSuggest: { enabled: true, showToolbar: 'onHover' },
     })
     this.diffEditor = null
     this.editor.onDidChangeCursorPosition((e) => this.emit('cursor', e.position))
