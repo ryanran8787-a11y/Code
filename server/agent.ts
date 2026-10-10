@@ -11,7 +11,7 @@ import * as ws from './workspace'
 import * as git from './git'
 import * as procs from './processes'
 import { shellLabel, isWindows } from './shell'
-import { decideApproval, compileList, isRetryable, backoffMs, sleep } from './policy'
+import { decideApproval, compileList, isRetryable, isFatal, backoffMs, sleep } from './policy'
 
 export type AgentStatus = 'idle' | 'running' | 'awaiting_approval' | 'done' | 'error' | 'stopped'
 
@@ -414,7 +414,7 @@ async function requestWithFallback(body: any, a: Agent, signal: AbortSignal) {
             break // next model (400 is fatal for this one)
           }
         }
-        if (!isRetryable(e)) throw e
+        if (!isRetryable(e) || isFatal(e)) throw e
         lastErr = e
         if (i < attempts - 1) {
           try {

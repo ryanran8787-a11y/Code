@@ -24,7 +24,7 @@ export function setupInlineEdit(group) {
 
   async function submit(instruction) {
     const w = widget
-    if (!w || !instruction.trim()) { close(); editor.focus(); return }
+    if (!w || w._busy || !instruction.trim()) { if (w && !w._busy) { close(); editor.focus() } return }
     const model = editor.getModel()
     const tab = group.activeTab()
     if (!model || !tab || tab.kind !== 'file') { close(); return }
@@ -34,6 +34,7 @@ export function setupInlineEdit(group) {
       endLineNumber: sel.startLineNumber, endColumn: model.getLineMaxColumn(sel.startLineNumber),
     }
     const selection = model.getValueInRange(range)
+    w._busy = true
     w.setLoading(true)
     try {
       const r = await fetch('/api/inline-edit', {
