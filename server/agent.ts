@@ -11,6 +11,7 @@ import * as ws from './workspace'
 import * as git from './git'
 import * as procs from './processes'
 import { shellLabel, isWindows } from './shell'
+import { decideApproval, compileList, isRetryable, backoffMs, sleep } from './policy'
 
 export type AgentStatus = 'idle' | 'running' | 'awaiting_approval' | 'done' | 'error' | 'stopped'
 
@@ -131,6 +132,7 @@ async function systemPrompt(a: Agent) {
 You operate on the user's workspace through tools. Workspace root: "${path.basename(ws.WORKSPACE_ROOT)}" (all paths are relative to it). Host OS: ${process.platform}; shell: ${shellLabel()}.${a.env === 'worktree' ? `
 You are running in an ISOLATED GIT WORKTREE on branch "${a.worktree?.branch}". Other agents may work in parallel in their own worktrees; your changes are reviewed and merged by the user.` : ''}${isWindows ? `
 Windows shell notes: chain commands with \`;\` (not \`&&\`); prefer \`node --version; npm test\` style; avoid bash-only syntax (\`ls -la\`, \`cat\`, \`grep\`) — use PowerShell equivalents (\`Get-ChildItem\`, \`Get-Content\`).` : ''}
+Terminal / background commands: denied patterns (${(getSettings().commandDenylist || []).join(' | ') || 'none'}) are blocked outright. These run without asking: (${(getSettings().commandAllowlist || []).join(' | ') || 'none'})${getSettings().autoRunCommands ? ' — plus auto-run is ON, so everything else runs too' : ' — anything else needs the user\'s approval in the UI, so batch reads before writes and avoid surprise long-running commands'}.
 
 ${mode === 'ask' ? 'ASK MODE: you may only read and search files. Do not modify files or run commands; answer the question.' : `Guidelines:
 - Work autonomously until the task is fully done. Explore with list_dir / file_search / grep_search, read_file before editing.
@@ -379,6 +381,54 @@ function sanitize(msgs: any[]) {
 
 const MUTATING = new Set(['edit_file', 'write_file', 'delete_file', 'run_terminal_command', 'start_background_process', 'stop_process'])
 
+/**
+ * Model request with retry + fallback: per model, retry retryable errors
+ * (429/5xx/timeout) with exponential backoff; then move to the next model
+ * in [primary, ...fallbackModels]. 400s get one compat retry without
+ * stream_options/temperature (some servers reject those fields).
+ */
+async function requestWithFallback(body: any, a: Agent, signal: AbortSignal) {
+  const s = getSettings()
+  const models = [a.model, ...(s.fallbackModels || []).filter((m) => m && m !== a.model)]
+  let lastErr: any = null
+  for (const model of models) {
+    const attempts = 1 + Math.max(0, s.retryBudget ?? 0)
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const r = await client().chat.completions.create({ ...body, model }, { signal })
+        if (model !== a.model) {
+          a.model = model
+          pushItem(a, { id: uid(), type: 'reasoning', text: `Primary model failed; continuing with fallback model \`${model}\`.`, ts: Date.now() })
+        }
+        return r
+      } catch (e: any) {
+        if (signal.aborted) throw e
+        if (e?.status === 400) {
+          try {
+            const slim = { ...body, model }
+            delete slim.stream_options
+            delete slim.temperature
+            return await client().chat.completions.create(slim, { signal })
+          } catch (e2) {
+            lastErr = e2
+            break // next model (400 is fatal for this one)
+          }
+        }
+        if (!isRetryable(e)) throw e
+        lastErr = e
+        if (i < attempts - 1) {
+          try {
+            await sleep(backoffMs(i), signal)
+          } catch {
+            throw e
+          }
+        }
+      }
+    }
+  }
+  throw lastErr
+}
+
 async function run(a: Agent) {
   const ctrl = new AbortController()
   controllers.set(a.id, ctrl)
@@ -393,16 +443,7 @@ async function run(a: Agent) {
       const body: any = { model: a.model, messages, tools, stream: true, stream_options: { include_usage: true } }
       if (settings.temperature !== null && settings.temperature !== undefined) body.temperature = settings.temperature
 
-      let stream: any
-      try {
-        stream = await client().chat.completions.create(body, { signal: ctrl.signal })
-      } catch (e: any) {
-        // Some OpenAI-compatible servers reject stream_options / temperature: retry once without extras.
-        if (e?.status === 400 && !ctrl.signal.aborted) {
-          delete body.stream_options; delete body.temperature
-          stream = await client().chat.completions.create(body, { signal: ctrl.signal })
-        } else throw e
-      }
+      let stream: any = await requestWithFallback(body, a, ctrl.signal)
       const textItem: TimelineItem = { id: uid(), type: 'assistant', text: '', ts: Date.now(), streaming: true }
       let textPushed = false
       let reasoning = ''
@@ -448,22 +489,37 @@ async function run(a: Agent) {
         try { args = c.args ? JSON.parse(c.args) : {} } catch { args = { _raw: c.args } }
         const item: any = { id: c.id, type: 'tool', name: c.name, args, status: 'running', ts: Date.now() }
         let result: string
-        if ((c.name === 'run_terminal_command' || c.name === 'start_background_process') && !getSettings().autoRunCommands) {
-          item.status = 'pending_approval'
-          pushItem(a, item)
-          setStatus(a, 'awaiting_approval')
-          const ok = await new Promise<boolean>((res) => approvals.set(`${a.id}:${c.id}`, res))
-          approvals.delete(`${a.id}:${c.id}`)
-          if (ctrl.signal.aborted) { item.status = 'rejected'; updateItem(a, item); return }
-          setStatus(a, 'running')
-          if (!ok) {
+        if (c.name === 'run_terminal_command' || c.name === 'start_background_process') {
+          const st = getSettings()
+          const decision = decideApproval(String(args.command || ''), {
+            autoRun: st.autoRunCommands,
+            allow: compileList(st.commandAllowlist),
+            deny: compileList(st.commandDenylist),
+          })
+          if (decision === 'deny') {
             item.status = 'rejected'
-            updateItem(a, item)
-            a.messages.push({ role: 'tool', tool_call_id: c.id, content: 'The user rejected running this command. Do not retry it; continue without it or ask the user.' })
+            item.result = 'Blocked by the workspace command denylist.'
+            pushItem(a, item)
+            a.messages.push({ role: 'tool', tool_call_id: c.id, content: 'Blocked by the workspace command denylist. Do not retry this command; continue without it or ask the user.' })
             continue
           }
-          item.status = 'running'
-          updateItem(a, item)
+          if (decision === 'ask') {
+            item.status = 'pending_approval'
+            pushItem(a, item)
+            setStatus(a, 'awaiting_approval')
+            const ok = await new Promise<boolean>((res) => approvals.set(`${a.id}:${c.id}`, res))
+            approvals.delete(`${a.id}:${c.id}`)
+            if (ctrl.signal.aborted) { item.status = 'rejected'; updateItem(a, item); return }
+            setStatus(a, 'running')
+            if (!ok) {
+              item.status = 'rejected'
+              updateItem(a, item)
+              a.messages.push({ role: 'tool', tool_call_id: c.id, content: 'The user rejected running this command. Do not retry it; continue without it or ask the user.' })
+              continue
+            }
+            item.status = 'running'
+            updateItem(a, item)
+          } else pushItem(a, item)
         } else pushItem(a, item)
 
         let outBuf = ''

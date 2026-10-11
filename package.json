@@ -9,7 +9,9 @@
     "dev": "tsx watch server/index.ts",
     "typecheck": "tsc --noEmit -p .",
     "test:e2e": "node tests/e2e.mjs",
-    "test:e2e-tab": "node tests/e2e-tab.mjs"
+    "test:e2e-tab": "node tests/e2e-tab.mjs",
+    "test:e2e-reliability": "node tests/e2e-reliability.mjs",
+    "test:policy": "tsx tests/policy-check.mts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
