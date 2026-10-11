@@ -35,3 +35,4 @@ lerna-debug.log*
 tests/screens/
 .env.local
 /workspace/
+/workspace-e2e/

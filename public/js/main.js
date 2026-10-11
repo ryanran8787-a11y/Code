@@ -4,6 +4,8 @@ import { agentStore, STATUS } from './agent-store.js'
 import { EditorWindow } from './editor-window.js'
 import { AgentsWindow } from './agents-window.js'
 import { quickPick } from './palette.js'
+import { setupTabCompletion } from './inline-tab.js'
+import { setupInlineEdit } from './inline-edit.js'
 import { h, icon, fileIcon, basename, toast, timeAgo } from './util.js'
 
 const app = {}
@@ -21,6 +23,7 @@ async function boot() {
 
   connectEvents()
   await Promise.all([agentStore.init(), files.refreshTree()])
+  setupTabCompletion()
   app.workspace = workspace
   document.title = `${workspace.name} — CursorWeb`
 
@@ -31,6 +34,7 @@ async function boot() {
   root.append(title, h('div', { class: 'windows' }, app.agents.el, app.editor.el))
   document.getElementById('boot').remove()
   document.body.append(root)
+  setupInlineEdit(app.editor.group)
 
   for (const w of [app.editor, app.agents]) {
     w.on('switch', (to, agentId) => switchWindow(to, agentId))

@@ -284,7 +284,7 @@ export async function changeDetails(agentId: string) {
 }
 
 // ---- the loop ---------------------------------------------------------------
-function client() {
+export function client() {
   const s = getSettings()
   let baseURL = s.baseUrl
   if (baseURL.startsWith('mock')) baseURL = `http://127.0.0.1:${process.env.PORT || 3000}/mock/v1`

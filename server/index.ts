@@ -16,7 +16,7 @@ import * as procs from './processes'
 import * as pty from './pty'
 import { proxy } from './browser'
 import { workspaceSymbols } from './symbols'
-
+import { tabComplete, inlineEdit } from './complete'
 const app = new Hono()
 if (process.env.LOG) app.use('*', logger())
 
@@ -148,6 +148,24 @@ app.delete('/api/terminals/:id', (c) => { pty.killTerminal(c.req.param('id')); r
 // ---------- symbols / mentions ----------
 app.get('/api/symbols', async (c) => c.json(await workspaceSymbols(c.req.query('q') || '', 100)))
 app.get('/api/dirs', async (c) => c.json((await ws.listFilesFlat(5000, true)).filter((p) => p.endsWith('/'))))
+
+// ---------- tab completion (ghost text) ----------
+app.post('/api/complete', async (c) => {
+  const b = await c.req.json().catch(() => ({}))
+  return c.json({ completion: await tabComplete({ path: String(b.path || ''), language: String(b.language || ''), prefix: String(b.prefix || ''), suffix: String(b.suffix || '') }) })
+})
+
+// ---------- inline edit (Ctrl+K) ----------
+app.post('/api/inline-edit', async (c) => {
+  const b = await c.req.json().catch(() => ({}))
+  return c.json({
+    replacement: await inlineEdit({
+      path: String(b.path || ''), language: String(b.language || ''),
+      context: String(b.context || ''), selection: String(b.selection || ''),
+      instruction: String(b.instruction || ''),
+    }),
+  })
+})
 
 // ---------- integrated browser (proxy local dev servers) ----------
 app.all('/preview/:port{[0-9]+}', (c) => c.redirect(`/preview/${c.req.param('port')}/`))
