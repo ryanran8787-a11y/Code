@@ -36,4 +36,5 @@ tests/screens/
 .env.local
 /workspace/
 /workspace-e2e/
+/workspace-e2e3/
 /ws-merge/
