@@ -125,6 +125,35 @@ export async function checkout(branch: string, create = false) {
   publish({ kind: 'git' })
 }
 
+/** Raw bytes of a file at a ref; null when absent. Binary-safe (unlike showFile). */
+export function gitBytes(args: string[], cwd = WORKSPACE_ROOT): Promise<Buffer | null> {
+  return new Promise((resolve) => {
+    execFile('git', args, { cwd, maxBuffer: 20 * 1024 * 1024, encoding: 'buffer', env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' } }, (err: any, stdout) => {
+      if (err) return resolve(null)
+      resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout as any))
+    })
+  })
+}
+
+async function showFileBytes(p: string, ref: string, cwd = WORKSPACE_ROOT): Promise<Buffer | null> {
+  return gitBytes(['show', `${ref}:${p}`], cwd)
+}
+
+/** Heuristic binary check: NUL byte in the first 8KB. */
+export function isBinary(buf: Buffer | null): boolean {
+  if (!buf) return false
+  return buf.subarray(0, 8000).includes(0)
+}
+
+// Serialize apply/revert per agent so parallel resolves can't interleave (TOCTOU).
+const mergeLocks = new Map<string, Promise<any>>()
+function withWorktreeLock<T>(agentId: string, fn: () => Promise<T>): Promise<T> {
+  const prev = mergeLocks.get(agentId) || Promise.resolve()
+  const next = (prev as Promise<any>).then(fn, fn)
+  mergeLocks.set(agentId, next.catch(() => {}))
+  return next
+}
+
 // ---------------------------------------------------------------- worktrees
 const WT_DIR = path.join(WORKSPACE_ROOT, '.cursorweb-worktrees')
 
@@ -165,63 +194,236 @@ export async function worktreeChanges(info: WorktreeInfo) {
   await git(['add', '-A', '--', '.', ':!node_modules'], info.dir)
   const r = await git(['diff', '--cached', '--name-status', '-z', info.base], info.dir)
   const parts = r.stdout.split('\0').filter(Boolean)
-  const out: { path: string; status: string }[] = []
+  const out: { path: string; from?: string; status: string }[] = []
   for (let i = 0; i < parts.length; i++) {
     const st = parts[i]
-    if (st.startsWith('R')) { out.push({ path: parts[i + 2], status: 'R' }); i += 2 } else { out.push({ path: parts[i + 1], status: st[0] }); i += 1 }
+    if (st.startsWith('R')) { out.push({ from: parts[i + 1], path: parts[i + 2], status: 'R' }); i += 2 } else { out.push({ path: parts[i + 1], status: st[0] }); i += 1 }
   }
   return out.filter((c) => c.path !== 'node_modules')
 }
 
+type MergeOp =
+  | { kind: 'skip'; path: string }
+  | { kind: 'write'; path: string; content: Buffer }
+  | { kind: 'remove'; path: string }
+  | { kind: 'merged'; path: string; content: Buffer }
+  | { kind: 'conflict'; path: string; merged?: Buffer }
+
+/** Copy bytes, preserving symlink-ness and permission bits. */
+function copyWithMeta(src: string, dest: string) {
+  const st = fs.lstatSync(src)
+  fs.rmSync(dest, { recursive: true, force: true })
+  if (st.isSymbolicLink()) {
+    fs.mkdirSync(path.dirname(dest), { recursive: true })
+    fs.symlinkSync(fs.readlinkSync(src), dest, symlinkType())
+    return
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
+  fs.copyFileSync(src, dest)
+  try { fs.chmodSync(dest, st.mode) } catch { /* best effort */ }
+}
+
+function readBytes(f: string): Buffer | null {
+  try {
+    if (fs.lstatSync(f).isSymbolicLink()) return Buffer.from('symlink:' + fs.readlinkSync(f))
+    return fs.readFileSync(f)
+  } catch {
+    return null
+  }
+}
+
+const sameBytes = (a: Buffer | null, b: Buffer | null) => (a === null || b === null ? a === b : a.equals(b))
+
+// --- line-ending handling -------------------------------------------------
+// Windows checkouts often materialize CRLF while git blobs (and agent-written
+// files) are LF. Comparing raw bytes would flag every line as changed, so
+// TEXT comparisons and merges run on LF-normalized content, while writes keep
+// the main working file's prevailing style (no full-file EOL churn).
+function detectEol(s: string): '\r\n' | '\n' {
+  const crlf = (s.match(/\r\n/g) || []).length
+  const lf = (s.match(/(?<!\r)\n/g) || []).length
+  return crlf > lf ? '\r\n' : '\n'
+}
+const toLF = (s: string) => s.replace(/\r\n/g, '\n')
+const toEol = (s: string, eol: '\r\n' | '\n') => (eol === '\r\n' ? s.replace(/(?<!\r)\n/g, '\r\n') : s)
+type TextDoc = { lf: string; eol: '\r\n' | '\n' }
+function asText(b: Buffer | null): TextDoc | null {
+  if (b === null) return null
+  const s = b.toString('utf8')
+  return { lf: toLF(s), eol: detectEol(s) }
+}
+
 /** Commit the agent's work on its branch and apply the patch to the main working tree. */
 export async function applyWorktree(info: WorktreeInfo, files?: string[], opts: { writeConflicts?: boolean } = {}) {
-  const changes = await worktreeChanges(info)
-  const pick = changes.filter((c) => !files || files.includes(c.path))
-  if (!pick.length) return { applied: [] as string[], conflicts: [] as string[] }
-  const applied: string[] = []
-  const conflicts: string[] = []
-  const os = await import('node:os')
-  for (const c of pick) {
-    const dest = path.join(WORKSPACE_ROOT, c.path)
-    const src = path.join(info.dir, c.path)
-    const baseContent = await showFile(c.path, info.base, info.dir)
-    const read = (f: string) => { try { return fs.readFileSync(f, 'utf8') } catch { return null } }
-    const mainContent = read(dest)
-    const wtContent = c.status === 'D' ? null : read(src)
-    if (mainContent === wtContent) { applied.push(c.path); continue } // already identical
-    // main unchanged since the agent forked -> take the agent version directly
-    if (mainContent === baseContent) {
-      if (wtContent === null) fs.rmSync(dest, { force: true })
-      else { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.copyFileSync(src, dest) }
-      applied.push(c.path); continue
+  return withWorktreeLock(info.agentId, async () => {
+    const changes = await worktreeChanges(info)
+    const pick = changes.filter((c) => !files || files.includes(c.path))
+    if (!pick.length) return { applied: [] as string[], conflicts: [] as string[] }
+
+    // Phase 1 (read-only): decide every file first so one bad file can't
+    // leave a half-applied workspace.
+    const ops: MergeOp[] = []
+    const tmps: string[] = []
+    try {
+      const os = await import('node:os')
+      for (const c of pick) {
+        const dest = path.join(WORKSPACE_ROOT, c.path)
+        const src = path.join(info.dir, c.path)
+        const baseContent = await showFileBytes(c.from ?? c.path, info.base, info.dir)
+        const mainContent = readBytes(dest)
+        const wtContent = c.status === 'D' ? null : readBytes(src)
+        if (sameBytes(mainContent, wtContent)) { ops.push({ kind: 'skip', path: c.path }); continue }
+        const mainBase = readBytes(path.join(WORKSPACE_ROOT, c.from ?? c.path))
+        const binaryLane = isBinary(mainContent) || isBinary(wtContent) || isBinary(baseContent) || isBinary(mainBase)
+        if (!binaryLane) {
+          // ---- text lane: compare/merge on LF, write back in main's style ----
+          const mainT = asText(mainContent)
+          const wtT = asText(wtContent)
+          const baseT = asText(baseContent)
+          const mainBaseT = asText(mainBase)
+          if ((mainT?.lf ?? null) === (wtT?.lf ?? null)) { ops.push({ kind: 'skip', path: c.path }); continue }
+          if ((mainBaseT?.lf ?? null) === (baseT?.lf ?? null)) {
+            if (wtT === null) ops.push({ kind: 'remove', path: c.path })
+            else {
+              // fast-forwarding a creation (new file or rename target) while
+              // main independently created the same path -> real conflict.
+              const isCreate = baseT === null || (c.status === 'R' && c.from && c.from !== c.path)
+              if (isCreate && mainT !== null) { ops.push({ kind: 'conflict', path: c.path }); continue }
+              if (c.status === 'R' && c.from && c.from !== c.path) ops.push({ kind: 'remove', path: c.from }) // drop the old name on rename
+              ops.push({ kind: 'write', path: c.path, content: Buffer.from(toEol(wtT.lf, mainT?.eol ?? wtT.eol), 'utf8') })
+            }
+            continue
+          }
+          if (mainT !== null && wtT !== null) {
+            const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-merge-'))
+            tmps.push(tmp)
+            const [fo, fb, ft] = ['ours', 'base', 'theirs'].map((n) => path.join(tmp, n))
+            fs.writeFileSync(fo, mainT.lf)
+            fs.writeFileSync(fb, baseT?.lf ?? '')
+            fs.writeFileSync(ft, wtT.lf)
+            const r = await git(['merge-file', '-p', '-L', 'workspace', '-L', 'base', '-L', `agent (${info.branch})`, fo, fb, ft], tmp)
+            const out = Buffer.from(toEol(r.stdout, mainT.eol), 'utf8')
+            if (r.code === 0) { ops.push({ kind: 'merged', path: c.path, content: out }); continue }
+            if (r.code > 0 && opts.writeConflicts) { ops.push({ kind: 'conflict', path: c.path, merged: out }); continue }
+          }
+          ops.push({ kind: 'conflict', path: c.path })
+          continue
+        }
+        // ---- binary lane: byte-exact, fast-forward or conflict, never merged ----
+        if (sameBytes(mainBase, baseContent)) {
+          if (wtContent === null) ops.push({ kind: 'remove', path: c.path })
+          else {
+            const isCreate = baseContent === null || (c.status === 'R' && c.from && c.from !== c.path)
+            if (isCreate && mainContent !== null && !sameBytes(mainContent, wtContent)) { ops.push({ kind: 'conflict', path: c.path }); continue }
+            if (c.status === 'R' && c.from && c.from !== c.path) ops.push({ kind: 'remove', path: c.from })
+            ops.push({ kind: 'write', path: c.path, content: wtContent })
+          }
+          continue
+        }
+        ops.push({ kind: 'conflict', path: c.path })
+      }
+    } finally {
+      for (const t of tmps) fs.rmSync(t, { recursive: true, force: true })
     }
-    // both sides changed: real 3-way merge of text files
-    if (mainContent !== null && wtContent !== null) {
-      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'cw-merge-'))
-      const [fo, fb, ft] = ['ours', 'base', 'theirs'].map((n) => path.join(tmp, n))
-      fs.writeFileSync(fo, mainContent); fs.writeFileSync(fb, baseContent ?? ''); fs.writeFileSync(ft, wtContent)
-      const r = await git(['merge-file', '-p', '-L', 'workspace', '-L', 'base', '-L', `agent (${info.branch})`, fo, fb, ft], tmp)
-      fs.rmSync(tmp, { recursive: true, force: true })
-      if (r.code === 0) { fs.writeFileSync(dest, r.stdout); applied.push(c.path); continue }
-      if (r.code > 0 && opts.writeConflicts) { fs.writeFileSync(dest, r.stdout); conflicts.push(c.path); continue } // leave <<<<<<< markers
+
+    // Phase 2: snapshot main versions so a mid-apply failure rolls back.
+    type Snap = { existed: boolean; buf: Buffer | null; mode: number; link: string | null }
+    const snaps = new Map<string, Snap>()
+    const snap = (p: string) => {
+      if (snaps.has(p)) return
+      try {
+        const st = fs.lstatSync(path.join(WORKSPACE_ROOT, p))
+        snaps.set(p, {
+          existed: true, mode: st.mode,
+          link: st.isSymbolicLink() ? fs.readlinkSync(path.join(WORKSPACE_ROOT, p)) : null,
+          buf: st.isSymbolicLink() ? null : fs.readFileSync(path.join(WORKSPACE_ROOT, p)),
+        })
+      } catch {
+        snaps.set(p, { existed: false, buf: null, mode: 0o644, link: null })
+      }
     }
-    conflicts.push(c.path)
-  }
-  for (const p of applied) main.emit({ change: 'changed', path: p, source: `agent:${info.agentId}` })
-  publish({ kind: 'git' })
-  return { applied, conflicts }
+    const applied: string[] = []
+    const conflicts: string[] = []
+    const restore = () => {
+      for (const [p, s] of snaps) {
+        const dest = path.join(WORKSPACE_ROOT, p)
+        try {
+          fs.rmSync(dest, { recursive: true, force: true })
+          if (!s.existed) continue
+          if (s.link !== null) fs.symlinkSync(s.link, dest, symlinkType())
+          else {
+            fs.mkdirSync(path.dirname(dest), { recursive: true })
+            fs.writeFileSync(dest, s.buf!)
+            try { fs.chmodSync(dest, s.mode) } catch { /* best effort */ }
+          }
+        } catch { /* best effort rollback */ }
+      }
+    }
+    try {
+      for (const op of ops) {
+        if (op.kind === 'skip') { applied.push(op.path); continue }
+        if (op.kind === 'conflict' && !op.merged) { conflicts.push(op.path); continue }
+        snap(op.path)
+        if (op.kind === 'remove') {
+          fs.rmSync(path.join(WORKSPACE_ROOT, op.path), { recursive: true, force: true })
+          applied.push(op.path)
+        } else if (op.kind === 'write') {
+          const src = path.join(info.dir, op.path)
+          try {
+            const st = fs.lstatSync(src)
+            if (st.isSymbolicLink()) {
+              const dest = path.join(WORKSPACE_ROOT, op.path)
+              fs.rmSync(dest, { recursive: true, force: true })
+              fs.mkdirSync(path.dirname(dest), { recursive: true })
+              fs.symlinkSync(fs.readlinkSync(src), dest, symlinkType())
+            } else copyWithMeta(src, path.join(WORKSPACE_ROOT, op.path))
+          } catch {
+            // worktree file vanished mid-apply: fall back to buffered bytes
+            const dest = path.join(WORKSPACE_ROOT, op.path)
+            fs.mkdirSync(path.dirname(dest), { recursive: true })
+            fs.writeFileSync(dest, (op as { content: Buffer }).content)
+          }
+          applied.push(op.path)
+        } else {
+          // merged / conflict-with-markers
+          const dest = path.join(WORKSPACE_ROOT, op.path)
+          fs.mkdirSync(path.dirname(dest), { recursive: true })
+          fs.writeFileSync(dest, (op as { content?: Buffer; merged?: Buffer }).content ?? (op as any).merged)
+          if (op.kind === 'conflict') conflicts.push(op.path)
+          else applied.push(op.path)
+        }
+      }
+    } catch (e) {
+      restore()
+      throw e
+    }
+    for (const p of applied) main.emit({ change: 'changed', path: p, source: `agent:${info.agentId}` })
+    publish({ kind: 'git' })
+    return { applied, conflicts }
+  })
 }
 
 /** Throw away selected (or all) agent changes inside the worktree. */
 export async function revertWorktree(info: WorktreeInfo, files?: string[]) {
-  const ws = worktreeWorkspace(info)
-  const changes = await worktreeChanges(info)
-  for (const c of changes.filter((c) => !files || files.includes(c.path))) {
-    const orig = await showFile(c.path, info.base, info.dir)
-    if (orig === null) await ws.deletePath(c.path, 'git').catch(() => {})
-    else await ws.writeFile(c.path, orig, 'git')
-  }
-  await git(['add', '-A'], info.dir)
+  return withWorktreeLock(info.agentId, async () => {
+    const w = worktreeWorkspace(info)
+    const changes = await worktreeChanges(info)
+    for (const c of changes.filter((c) => !files || files.includes(c.path))) {
+      // renames: drop the new name, restore under the old one
+      if (c.status === 'R' && c.from && c.from !== c.path) await w.deletePath(c.path, 'git').catch(() => {})
+      const target = c.status === 'R' && c.from ? c.from : c.path
+      const orig = await showFileBytes(c.from ?? c.path, info.base, info.dir)
+      if (orig === null) await w.deletePath(target, 'git').catch(() => {})
+      else {
+        // byte-exact restore (the old string-based write corrupted binaries)
+        const dest = path.join(info.dir, target)
+        fs.mkdirSync(path.dirname(dest), { recursive: true })
+        fs.writeFileSync(dest, orig)
+        w.emit({ change: 'changed', path: target, source: 'git' })
+      }
+    }
+    await git(['add', '-A'], info.dir)
+  })
 }
 
 export async function removeWorktree(info: WorktreeInfo, deleteBranch = true) {
