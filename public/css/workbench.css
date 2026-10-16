@@ -564,3 +564,12 @@ button.sb-remote:hover { background: var(--accent); filter: brightness(1.15); co
 
 .chip-codebase .codicon { color: #4daafc; }
 
+
+.plan-badge { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; color: #d2a8ff; background: #a371f71a; border: 1px solid #a371f755; border-radius: 10px; padding: 0 7px; white-space: nowrap; }
+.plan-badge.ask { color: #4daafc; background: #4daafc1a; border-color: #4daafc55; }
+.plan-badge .codicon { font-size: 12px; }
+
+
+.plan-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #a371f755; border-radius: 8px; background: #a371f71a; font-size: 12px; margin-bottom: 6px; }
+.plan-bar .codicon { color: #d2a8ff; }
+

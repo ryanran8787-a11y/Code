@@ -14,7 +14,8 @@
     "test:policy": "tsx tests/policy-check.mts",
     "test:merge": "tsx tests/merge-check.mts",
     "test:codebase": "tsx tests/codebase-check.mts",
-    "test:e2e-codebase": "node tests/e2e-codebase.mjs"
+    "test:e2e-codebase": "node tests/e2e-codebase.mjs",
+    "test:e2e-plan": "node tests/e2e-plan.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

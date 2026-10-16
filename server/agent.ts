@@ -38,7 +38,7 @@ export type Agent = {
   id: string
   title: string
   model: string
-  mode: 'agent' | 'ask'
+  mode: 'agent' | 'ask' | 'plan'
   status: AgentStatus
   createdAt: number
   updatedAt: number
@@ -134,7 +134,19 @@ You are running in an ISOLATED GIT WORKTREE on branch "${a.worktree?.branch}". O
 Windows shell notes: chain commands with \`;\` (not \`&&\`); prefer \`node --version; npm test\` style; avoid bash-only syntax (\`ls -la\`, \`cat\`, \`grep\`) — use PowerShell equivalents (\`Get-ChildItem\`, \`Get-Content\`).` : ''}
 Terminal / background commands: denied patterns (${(getSettings().commandDenylist || []).join(' | ') || 'none'}) are blocked outright. These run without asking: (${(getSettings().commandAllowlist || []).join(' | ') || 'none'})${getSettings().autoRunCommands ? ' — plus auto-run is ON, so everything else runs too' : ' — anything else needs the user\'s approval in the UI, so batch reads before writes and avoid surprise long-running commands'}.
 
-${mode === 'ask' ? 'ASK MODE: you may only read and search files. Do not modify files or run commands; answer the question.' : `Guidelines:
+${mode === 'ask' ? 'ASK MODE: you may only read and search files. Do not modify files or run commands; answer the question.' : mode === 'plan' ? `PLAN MODE: explore with list_dir / file_search / grep_search / read_file and write a concrete implementation plan. Do not modify files or run commands.
+Structure your final message as:
+## Goal
+(one line: what will change and why)
+## Findings
+(what you learned from exploration: relevant files, symbols, constraints)
+## Steps
+(numbered steps, each naming exact files and the change; mark independent steps that could run in parallel)
+## Risks
+(what could break, edge cases)
+## Verification
+(how to confirm it works: commands, tests, manual checks)
+End with the single line: "Plan ready for review."` : `Guidelines:
 - Work autonomously until the task is fully done. Explore with list_dir / file_search / grep_search, read_file before editing.
 - Prefer edit_file with a small unique old_string for existing files; use write_file for new files.
 - Use run_terminal_command for short commands (builds, tests). For dev servers / watchers use start_background_process, then verify pages or APIs with fetch_url (e.g. http://localhost:PORT/) and stop_process when done.
@@ -148,13 +160,14 @@ ${tree || '(empty workspace)'}${a.summary ? `\n\n## Summary of earlier conversat
 }
 
 // ---- lifecycle --------------------------------------------------------------
-export async function createAgent(opts: { prompt: string; model?: string; mode?: 'agent' | 'ask'; title?: string; env?: 'local' | 'worktree' }) {
+export async function createAgent(opts: { prompt: string; model?: string; mode?: 'agent' | 'ask' | 'plan'; title?: string; env?: 'local' | 'worktree' }) {
   const s = getSettings()
+  const mode = opts.mode === 'ask' || opts.mode === 'plan' ? opts.mode : 'agent'
   const a: Agent = {
     id: uid(),
     title: opts.title || opts.prompt.split('\n')[0].slice(0, 60) || 'New Agent',
     model: opts.model || s.defaultModel,
-    mode: opts.mode || 'agent',
+    mode,
     status: 'idle',
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -172,12 +185,12 @@ export async function createAgent(opts: { prompt: string; model?: string; mode?:
   return a
 }
 
-export function sendMessage(id: string, text: string, model?: string, mode?: 'agent' | 'ask') {
+export function sendMessage(id: string, text: string, model?: string, mode?: 'agent' | 'ask' | 'plan') {
   const a = agents.get(id)
   if (!a) throw new Error('Agent not found')
   if (a.status === 'running' || a.status === 'awaiting_approval') throw new Error('Agent is busy')
   if (model) a.model = model
-  if (mode) a.mode = mode
+  if (mode === 'agent' || mode === 'ask' || mode === 'plan') a.mode = mode
   a.messages.push({ role: 'user', content: text })
   pushItem(a, { id: uid(), type: 'user', text, ts: Date.now() })
   run(a).catch((e) => console.error('agent crashed', e))
@@ -437,7 +450,7 @@ async function run(a: Agent) {
   try {
     for (let step = 0; step < settings.maxSteps; step++) {
       if (ctrl.signal.aborted) return
-      const tools = a.mode === 'ask' ? TOOL_SCHEMAS.filter((t) => !MUTATING.has(t.function.name)) : TOOL_SCHEMAS
+      const tools = a.mode === 'agent' ? TOOL_SCHEMAS : TOOL_SCHEMAS.filter((t) => !MUTATING.has(t.function.name))
       await maybeCompact(a, ctrl.signal)
       const messages = [{ role: 'system', content: await systemPrompt(a) }, ...sanitize(a.messages.slice(a.compacted || 0))]
       const body: any = { model: a.model, messages, tools, stream: true, stream_options: { include_usage: true } }

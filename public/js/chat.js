@@ -27,6 +27,7 @@ export class Composer {
     this.onSubmit = onSubmit
     this.onStop = onStop
     this.mode = localStorage.getItem('composer.mode') || 'agent'
+    if (!['agent', 'plan', 'ask'].includes(this.mode)) this.mode = 'agent'
     this.env = localStorage.getItem('composer.env') || agentStore.settings?.defaultEnv || 'local'
     this.model = localStorage.getItem('composer.model') || agentStore.settings?.defaultModel || ''
     this.busy = false
@@ -63,11 +64,17 @@ export class Composer {
     if (!models.includes(this.model)) this.model = agentStore.settings?.defaultModel || models[0] || ''
     this.modelSel.replaceChildren(...models.map((m) => h('option', { value: m, selected: m === this.model }, m)))
   }
-  toggleMode() { this.mode = this.mode === 'agent' ? 'ask' : 'agent'; localStorage.setItem('composer.mode', this.mode); this.renderMode() }
+  toggleMode() {
+    this.mode = this.mode === 'agent' ? 'plan' : this.mode === 'plan' ? 'ask' : 'agent'
+    localStorage.setItem('composer.mode', this.mode)
+    this.renderMode()
+  }
   toggleEnv() { if (!this.isNew) return; this.env = this.env === 'local' ? 'worktree' : 'local'; localStorage.setItem('composer.env', this.env); this.renderMode() }
   setNew(isNew, agent) { this.isNew = isNew; this.agentEnv = agent?.env; this.renderMode() }
   renderMode() {
-    this.modeBtn.replaceChildren(icon(this.mode === 'agent' ? 'infinity' : 'comment-discussion'), h('span', {}, this.mode === 'agent' ? 'Agent' : 'Ask'), icon('chevron-down', 'small'))
+    const meta = this.mode === 'agent' ? ['infinity', 'Agent'] : this.mode === 'plan' ? ['checklist', 'Plan'] : ['comment-discussion', 'Ask']
+    this.modeBtn.replaceChildren(icon(meta[0]), h('span', {}, meta[1]), icon('chevron-down', 'small'))
+    this.modeBtn.title = this.mode === 'agent' ? 'Mode: Agent can edit files & run commands' : this.mode === 'plan' ? 'Mode: Plan explores and writes a plan for approval, no changes' : 'Mode: Ask answers questions, no changes'
     const env = this.isNew ? this.env : this.agentEnv || 'local'
     this.envBtn.replaceChildren(icon(env === 'worktree' ? 'git-branch' : 'device-desktop'), h('span', {}, env === 'worktree' ? 'Worktree' : 'Local'))
     this.envBtn.classList.toggle('locked', !this.isNew)
@@ -257,6 +264,7 @@ export class AgentChatView {
     this.scroller.append(this.list)
     this.todosEl = h('div', { class: 'chat-todos hidden' })
     this.changesBar = h('div', { class: 'changes-bar hidden' })
+    this.planBar = h('div', { class: 'plan-bar hidden' })
     this.composer = new Composer({
       compact,
       onSubmit: (text, o) => this.submit(text, o),
@@ -264,7 +272,7 @@ export class AgentChatView {
     })
     this.header = h('div', { class: 'chat-header' })
     this.el = h('div', { class: 'agent-chat' + (compact ? ' compact' : '') }, this.header, this.scroller,
-      h('div', { class: 'chat-bottom' }, this.todosEl, this.changesBar, this.composer.el))
+      h('div', { class: 'chat-bottom' }, this.planBar, this.todosEl, this.changesBar, this.composer.el))
     this.stick = true
     this.scroller.addEventListener('scroll', () => {
       this.stick = this.scroller.scrollHeight - this.scroller.scrollTop - this.scroller.clientHeight < 40
@@ -322,12 +330,15 @@ export class AgentChatView {
     this.composer.setBusy(!!busy)
     this.composer.setNew(!a, a)
     this.composer.setUsage(a)
+    this.renderPlan(a)
     this.header.replaceChildren()
     if (a) {
       const st = STATUS[a.status] || STATUS.idle
       this.header.append(
         h('span', { class: `status-dot ${st.cls}` }, icon(st.icon, a.status === 'running' ? 'codicon-modifier-spin' : '')),
         h('span', { class: 'chat-title', title: a.title }, a.title),
+        a.mode === 'plan' ? h('span', { class: 'plan-badge', title: 'Plan mode: read-only, approve to execute' }, icon('checklist'), 'Plan') : null,
+        a.mode === 'ask' ? h('span', { class: 'plan-badge ask', title: 'Ask mode: read-only' }, icon('comment-discussion'), 'Ask') : null,
         a.env === 'worktree' ? h('span', { class: 'wt-badge', title: 'Isolated git worktree branch' }, icon('git-branch'), a.branch || 'worktree') : null,
         h('span', { class: 'chat-sub' }, a.model),
         h('div', { class: 'flex1' }),
@@ -354,6 +365,19 @@ export class AgentChatView {
         ...a.todos.map((t) => h('div', { class: 'todo ' + t.status }, icon(t.status === 'completed' ? 'pass-filled' : t.status === 'in_progress' ? 'circle-large-filled' : 'circle-large-outline'), h('span', {}, t.content))),
       )
     } else this.todosEl.classList.add('hidden')
+  }
+
+  /** Approve bar for finished plan agents (visible in compact auxbar too). */
+  renderPlan(a) {
+    const ready = !!a && a.mode === 'plan' && ['done', 'error', 'stopped'].includes(a.status)
+    this.planBar.classList.toggle('hidden', !ready)
+    if (ready) {
+      this.planBar.replaceChildren(
+        icon('checklist'), h('span', {}, 'Plan ready for review.'),
+        h('div', { class: 'flex1' }),
+        h('button', { class: 'btn-primary small', title: 'Approve plan & execute', onclick: () => agentStore.send(a.id, 'Plan approved. Execute it now.', { mode: 'agent' }).catch((e) => toast(e.message, 'error')) }, icon('check'), 'Approve & Execute'),
+      )
+    }
   }
 
   async renderChanges() {
