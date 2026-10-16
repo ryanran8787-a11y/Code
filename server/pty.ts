@@ -72,4 +72,10 @@ export function attachTerminalServer(server: Server, authorize: (req: IncomingMe
   })
 }
 
-process.on('exit', () => { for (const s of sessions.values()) try { s.pty.kill() } catch { /* ignore */ } })
+process.on('exit', () => {
+  // On Windows the conpty kill helper needs a console; in headless/service
+  // environments it throws uncaught during teardown, so let the OS reap
+  // consoles instead. POSIX still needs explicit kills (no SIGHUP inheritance).
+  if (process.platform === 'win32') return
+  for (const s of sessions.values()) try { s.pty.kill() } catch { /* ignore */ }
+})

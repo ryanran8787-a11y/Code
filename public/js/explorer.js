@@ -178,12 +178,14 @@ export class SearchView {
     }))
   }
   async maybeRgHint() {
-    if (this._rgChecked) return
-    this._rgChecked = true
-    try {
-      const r = await api.get('/api/search-backend')
-      if (r.backend !== 'rg') this.summary.textContent += ' — ripgrep not found, search is slow (Windows: winget install BurntSushi.ripgrep.MSVC)'
-    } catch { /* ignore */ }
+    if (this._rgHint === undefined) {
+      this._rgHint = ''
+      try {
+        const r = await api.get('/api/search-backend')
+        if (r.backend !== 'rg') this._rgHint = ' — ripgrep not found, search is slow (Windows: winget install BurntSushi.ripgrep.MSVC)'
+      } catch { /* ignore */ }
+    }
+    this.summary.textContent += this._rgHint
   }
 }
 function safeRe(q, cs) { try { return new RegExp(q, cs ? 'g' : 'gi') } catch { return /$^/ } }

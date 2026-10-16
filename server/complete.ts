@@ -11,8 +11,8 @@ export function cleanCompletion(text: string): string | null {
   let t = (text || '').replace(/\r\n/g, '\n')
   const fence = /^```[\w+-]*\n([\s\S]*?)\n```\s*$/.exec(t.trim())
   if (fence) t = fence[1]
-  // drop leading blank lines the model sometimes adds
-  t = t.replace(/^(?:[ \t]*\n)+/, '').replace(/[ \t]+$/gm, (m) => (m.includes('\n') ? m : ''))
+  // drop leading blank lines the model sometimes adds; strip trailing whitespace
+  t = t.replace(/^(?:[ \t]*\n)+/, '').replace(/[ \t]+$/gm, '')
   t = t.trimEnd()
   if (!t) return null
   const lines = t.split('\n')
@@ -31,10 +31,12 @@ export function mockComplete(prefix: string): string | null {
   const line = lastLine(prefix)
   if (/console\.$/.test(line)) return 'log();'
   if (/(?:^|[\s=(,])print\($/.test(line)) return ')'
-  // unclosed call on this line, e.g. `foo(bar` -> `)`
+  // don't guess when the line ends with an opener but parens already balance
+  // (e.g. a trailing comma in a literal) — too ambiguous for ghost text
   const opens = (line.match(/\(/g) || []).length
   const closes = (line.match(/\)/g) || []).length
   if (/[(\[{,]\s*$/.test(line) && opens <= closes) return null
+  // unclosed call directly attached to a name, e.g. `foo(` -> `)`
   if (/[^\s(]\($/.test(line)) return ')'
   return null
 }
@@ -47,22 +49,25 @@ export async function tabComplete(opts: CompleteOpts): Promise<string | null> {
   if (s.baseUrl.startsWith('mock')) return mockComplete(pre)
   const lang = opts.language || 'text'
   try {
-    const r: any = await client().chat.completions.create({
-      model: s.defaultModel,
-      temperature: 0,
-      max_tokens: 256,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a code completion engine. Output ONLY the exact text that should be inserted at <cursor> — no explanations, no code fences, no leading/trailing commentary. Complete at most one logical block. If no confident completion exists, output nothing.',
-        },
-        {
-          role: 'user',
-          content: `File: ${opts.path || '(untitled)'}\nLanguage: ${lang}\n\n<before>\n${pre}\n</before>\n<cursor/>\n<after>\n${suf}\n</after>`,
-        },
-      ],
-    })
+    const r: any = await client().chat.completions.create(
+      {
+        model: s.defaultModel,
+        temperature: 0,
+        max_tokens: 256,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are a code completion engine. Output ONLY the exact text that should be inserted at <cursor> — no explanations, no code fences, no leading/trailing commentary. Complete at most one logical block. If no confident completion exists, output nothing.',
+          },
+          {
+            role: 'user',
+            content: `File: ${opts.path || '(untitled)'}\nLanguage: ${lang}\n\n<before>\n${pre}\n</before>\n<cursor/>\n<after>\n${suf}\n</after>`,
+          },
+        ],
+      },
+      { signal: AbortSignal.timeout(20_000) },
+    )
     return cleanCompletion(r.choices?.[0]?.message?.content ?? '')
   } catch {
     return null
@@ -81,22 +86,25 @@ export async function inlineEdit(opts: EditOpts): Promise<string | null> {
     return cm ? `${sel.trimEnd()}\n${cm}` : null
   }
   try {
-    const r: any = await client().chat.completions.create({
-      model: s.defaultModel,
-      temperature: 0,
-      max_tokens: 1024,
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are an inline code editor. Output ONLY the replacement code for <selection> — no explanations, no code fences. Preserve the existing style and indentation. Keep the change minimal and confined to the selection.',
-        },
-        {
-          role: 'user',
-          content: `File: ${opts.path || '(untitled)'}\nLanguage: ${opts.language || 'text'}\n\n<context>\n${opts.context.slice(-4000)}\n</context>\n<selection>\n${sel.slice(0, 4000)}\n</selection>\n\nInstruction: ${opts.instruction}`,
-        },
-      ],
-    })
+    const r: any = await client().chat.completions.create(
+      {
+        model: s.defaultModel,
+        temperature: 0,
+        max_tokens: 1024,
+        messages: [
+          {
+            role: 'system',
+            content:
+              'You are an inline code editor. Output ONLY the replacement code for <selection> — no explanations, no code fences. Preserve the existing style and indentation. Keep the change minimal and confined to the selection.',
+          },
+          {
+            role: 'user',
+            content: `File: ${opts.path || '(untitled)'}\nLanguage: ${opts.language || 'text'}\n\n<context>\n${opts.context.slice(-4000)}\n</context>\n<selection>\n${sel.slice(0, 4000)}\n</selection>\n\nInstruction: ${opts.instruction}`,
+          },
+        ],
+      },
+      { signal: AbortSignal.timeout(60_000) },
+    )
     return cleanCompletion(r.choices?.[0]?.message?.content ?? '')
   } catch {
     return null
