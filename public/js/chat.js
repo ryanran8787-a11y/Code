@@ -2,7 +2,7 @@
 // terminal output, approvals, todos) plus the composer. Used by the Agents
 // Window main pane and by the Editor Window's secondary side bar.
 import { agentStore, STATUS } from './agent-store.js'
-import { api } from './api.js'
+import { api, bus } from './api.js'
 import { files } from './files.js'
 import { h, icon, renderMarkdown, basename, fileIcon, lineDiffStats, toast } from './util.js'
 
@@ -115,7 +115,11 @@ export class Composer {
   }
   mentionQuery() {
     const pos = this.input.selectionStart
-    const m = /(^|\s)@([^\s@]*)$/.exec(this.input.value.slice(0, pos))
+    const before = this.input.value.slice(0, pos)
+    // @codebase:<query> may contain spaces — match it before the single-token rule
+    let m = /@codebase:([^@]*)$/.exec(before)
+    if (m) return { q: 'codebase:' + m[1], start: pos - m[0].length, end: pos }
+    m = /(^|\s)@([^\s@]*)$/.exec(before)
     return m ? { q: m[2], start: pos - m[2].length - 1, end: pos } : null
   }
   async updateMention() {
@@ -123,8 +127,8 @@ export class Composer {
     if (!mq) return this.closeMenu()
     const q = mq.q.toLowerCase()
     const seq = (this._seq = (this._seq || 0) + 1)
-    // @codebase:<query> — ranked cross-file search (single token; add one
-    // chip per term for multi-word). Takes over the whole menu.
+    // @codebase:<query> — ranked cross-file search. The query may contain
+    // spaces (matched before the single-token rule in mentionQuery).
     if (q.startsWith('codebase:')) {
       const query = mq.q.slice('codebase:'.length)
       if (!query) return this.closeMenu()
@@ -275,6 +279,8 @@ export class AgentChatView {
       agentStore.on('summary', (s) => { if (s.id !== this.agentId) return; this.renderMeta(); if (s.unread && this.el.isConnected && this.el.offsetParent) agentStore.markRead(s.id) }),
       agentStore.on('changes', (id) => id === this.agentId && this.renderChanges()),
       agentStore.on('detail', (id) => id === this.agentId && this.renderAll()),
+      // deleting the shown agent (here or in another window) resets to a fresh composer
+      bus.on('agent.deleted', (e) => { if (e.agentId === this.agentId) this.show(null) }),
     ]
   }
 

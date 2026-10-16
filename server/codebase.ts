@@ -1,8 +1,7 @@
 // @codebase search: query-weighted file retrieval without embeddings.
 // Combines filename matches, regex symbol hits and ripgrep content hits into
 // a ranked, char-budgeted pack of snippets for the composer's context chips.
-// Triggered from the composer with @codebase:<query> (single token; spaces
-// would close the mention popup, so add one chip per term for multi-word).
+// Triggered from the composer with @codebase:<query> (spaces allowed).
 import { main } from './workspace'
 import { workspaceSymbols } from './symbols'
 

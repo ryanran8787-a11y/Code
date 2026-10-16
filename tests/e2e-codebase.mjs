@@ -59,6 +59,31 @@ try {
   ok(!!userMsg && userMsg.text.includes('src/todo.js'), 'expansion includes ranked file')
   await api('/api/agents/' + agent.id, 'DELETE')
 
+  console.log('2. multi-word query keeps the menu open')
+  await p.click('.auxbar .composer-input')
+  await p.keyboard.type('@codebase:todo list')
+  await p.waitForSelector('.mention-menu .mm-item', { timeout: 8000 })
+  const label2 = await p.textContent('.mention-menu .mm-item')
+  ok((label2 || '').includes('Codebase: todo list'), `multi-word item shown (got: ${JSON.stringify(label2)})`)
+  await p.keyboard.press('Enter')
+  await p.waitForSelector('.chip-codebase[title="todo list"]', { timeout: 5000 })
+  ok(true, 'multi-word chip added')
+  // composer busy flag follows agent status over SSE; wait until it clears
+  await p.waitForFunction(() => !document.querySelector('.auxbar .composer-send.stop'), null, { timeout: 15000 })
+  await p.keyboard.type('Explain.')
+  await p.keyboard.press('Enter')
+  let agent2 = null
+  for (let i = 0; i < 30; i++) {
+    const list = await api('/api/agents')
+    if (list.length) { agent2 = list[0]; break }
+    await new Promise((r) => setTimeout(r, 1000))
+  }
+  ok(!!agent2, 'second submit created an agent')
+  const full2 = await waitDone(agent2.id)
+  const userMsg2 = (full2.timeline || []).find((t) => t.type === 'user')
+  ok(!!userMsg2 && userMsg2.text.includes('Codebase search for `todo list`'), 'multi-term expansion reached the agent')
+  await api('/api/agents/' + agent2.id, 'DELETE')
+
   ok(errors.length === 0, `no page errors${errors.length ? ': ' + errors.join(' | ') : ''}`)
   console.log('CODEBASE-E2E-OK')
 } finally {
