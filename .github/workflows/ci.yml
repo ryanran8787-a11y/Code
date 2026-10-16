@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run test:policy
+      - run: WORKSPACE=examples/todo-app npm run test:codebase
+      - run: WORKSPACE=${{ runner.temp }}/ws-merge npm run test:merge
+
+  e2e:
+    needs: quick
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: |
+          nohup npm start > server.log 2>&1 &
+          echo $! > server.pid
+          for i in $(seq 1 60); do
+            curl -sf http://127.0.0.1:3000/api/workspace && break
+            sleep 1
+          done
+          curl -sf http://127.0.0.1:3000/api/workspace || (echo '--- server failed to boot ---'; tail -50 server.log; exit 1)
+      - run: npm run test:e2e
+        env:
+          BASE: http://localhost:3000
+      - run: npm run test:e2e-tab
+        env:
+          BASE: http://localhost:3000
+          WS: workspace
+      - run: npm run test:e2e-reliability
+        env:
+          BASE: http://localhost:3000
+      - run: npm run test:e2e-codebase
+        env:
+          BASE: http://localhost:3000
+      - run: kill $(cat server.pid) || true
+        if: always()
