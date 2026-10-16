@@ -25,6 +25,7 @@ Both windows share one set of state: files, Monaco models and agents. Switch bet
 - **Integrated browser**: the `/preview/<port>/` reverse proxy shows local dev servers even when the IDE itself is remote. It rewrites root-relative URLs and redirects, and captures console errors from the page.
 - **Design Mode**: click any element on the page → its selector, size, text and computed styles plus your note become a structured request in the agent's composer
 - **@ mentions**: inline popup for files, folders, symbols (lightweight regex index across languages), terminal output and the browser page; chips are expanded into structured context
+- **@codebase**: `@codebase:<query>` (spaces allowed) runs ranked cross-file retrieval — filename, symbol and ripgrep hits scored with a char budget — and pastes the packed snippets as context
 - **Context management**: estimates the context in use (falls back to the provider's `usage`) and shows a meter in the composer. Past 80% of the window, older turns are summarized by the model and folded into the system prompt; the most recent turns stay verbatim and tool_call/tool pairs are never split. You can also compact manually, and the header shows total in/out tokens.
 - **Safety / review**: terminal commands and background processes need approval by default (or switch to auto-run). Local-mode changes are snapshotted so you can Keep or Undo per file; worktree mode reviews via git diff.
 - Ask / Agent modes, model picker, Agents Window single / side-by-side / 4-grid layouts, review panel (Changes / Files / Browser)
