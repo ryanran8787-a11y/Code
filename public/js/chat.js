@@ -98,7 +98,7 @@ export class Composer {
     this.renderChips()
   }
   renderChips() {
-    const ic = (c) => c.type === 'file' ? fileIcon(c.value) : icon(c.type === 'folder' ? 'folder' : c.type === 'symbol' ? 'symbol-method' : c.type === 'terminal' ? 'terminal' : 'globe')
+    const ic = (c) => c.type === 'file' ? fileIcon(c.value) : icon(c.type === 'folder' ? 'folder' : c.type === 'symbol' ? 'symbol-method' : c.type === 'terminal' ? 'terminal' : c.type === 'codebase' ? 'search' : 'globe')
     this.chips.replaceChildren(...this.context.map((c) => h('span', { class: 'chip chip-' + c.type, title: c.value }, ic(c), c.label,
       h('button', { class: 'chip-x', onclick: () => { this.context = this.context.filter((x) => x !== c); this.renderChips() } }, icon('close')))))
   }
@@ -123,6 +123,14 @@ export class Composer {
     if (!mq) return this.closeMenu()
     const q = mq.q.toLowerCase()
     const seq = (this._seq = (this._seq || 0) + 1)
+    // @codebase:<query> — ranked cross-file search (single token; add one
+    // chip per term for multi-word). Takes over the whole menu.
+    if (q.startsWith('codebase:')) {
+      const query = mq.q.slice('codebase:'.length)
+      if (!query) return this.closeMenu()
+      this.renderMenu([{ type: 'codebase', value: query, label: 'Codebase: ' + query, desc: 'ranked snippets across the workspace', icon: icon('search') }], mq)
+      return
+    }
     const fuzzy = (s) => { let i = 0; s = s.toLowerCase(); for (const ch of q) { i = s.indexOf(ch, i); if (i < 0) return false; i++ } return true }
     const specials = [
       { type: 'terminal', value: 'terminal', label: 'Terminal output', desc: 'latest background process output', icon: icon('terminal') },
@@ -150,7 +158,7 @@ export class Composer {
     this.menuItems = items
     this.menuMq = mq
     this.menuSel = Math.min(this.menuSel || 0, items.length - 1)
-    const group = { file: 'Files', folder: 'Folders', symbol: 'Symbols', terminal: 'Other', browser: 'Other' }
+    const group = { file: 'Files', folder: 'Folders', symbol: 'Symbols', terminal: 'Other', browser: 'Other', codebase: 'Codebase' }
     let last = null
     this.menu.replaceChildren(...items.flatMap((it, i) => {
       const out = []
@@ -201,6 +209,16 @@ export class Composer {
       } else if (c.type === 'browser') {
         const url = localStorage.getItem('browser.url')
         parts.push(url ? `- Browser page: http://${url} (use fetch_url to inspect it)` : '- Browser page: (none open)')
+      } else if (c.type === 'codebase') {
+        try {
+          const r = await api.post('/api/codebase', { query: c.value })
+          if (r.files?.length) {
+            parts.push(`- Codebase search for \`${c.value}\` (${r.files.length} file${r.files.length > 1 ? 's' : ''}${r.truncated ? ', truncated' : ''}):\n` + r.files.map((f) =>
+              `  - \`${f.path}\` (score ${f.score}):\n\`\`\`\n${f.snippets.map((s) => `${s.line}| ${s.text}`).join('\n')}\n\`\`\``).join('\n'))
+          } else parts.push(`- Codebase search for \`${c.value}\`: no matches`)
+        } catch {
+          parts.push(`- Codebase search for \`${c.value}\`: (search failed)`)
+        }
       }
     }
     return parts.length ? '\n\nContext:\n' + parts.join('\n') : ''

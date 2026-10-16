@@ -12,7 +12,9 @@
     "test:e2e-tab": "node tests/e2e-tab.mjs",
     "test:e2e-reliability": "node tests/e2e-reliability.mjs",
     "test:policy": "tsx tests/policy-check.mts",
-    "test:merge": "tsx tests/merge-check.mts"
+    "test:merge": "tsx tests/merge-check.mts",
+    "test:codebase": "tsx tests/codebase-check.mts",
+    "test:e2e-codebase": "node tests/e2e-codebase.mjs"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",

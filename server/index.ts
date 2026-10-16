@@ -17,6 +17,7 @@ import * as pty from './pty'
 import { proxy } from './browser'
 import { workspaceSymbols } from './symbols'
 import { tabComplete, inlineEdit } from './complete'
+import { searchCodebase } from './codebase'
 const app = new Hono()
 if (process.env.LOG) app.use('*', logger())
 
@@ -153,6 +154,12 @@ app.get('/api/dirs', async (c) => c.json((await ws.listFilesFlat(5000, true)).fi
 app.post('/api/complete', async (c) => {
   const b = await c.req.json().catch(() => ({}))
   return c.json({ completion: await tabComplete({ path: String(b.path || ''), language: String(b.language || ''), prefix: String(b.prefix || ''), suffix: String(b.suffix || '') }) })
+})
+
+// ---------- codebase search (@codebase:<query>) ----------
+app.post('/api/codebase', async (c) => {
+  const b = await c.req.json().catch(() => ({}))
+  return c.json(await searchCodebase(String(b.query || ''), { maxFiles: +(b.maxFiles || 8), maxChars: +(b.maxChars || 12000) }))
 })
 
 // ---------- inline edit (Ctrl+K) ----------
